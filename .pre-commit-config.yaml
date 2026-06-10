@@ -1,0 +1,60 @@
+repos:
+  - repo: local
+    hooks:
+      - id: trailing-whitespace
+        name: trailing-whitespace
+        entry: uv run trailing-whitespace-fixer
+        language: system
+        types: [text]
+
+      - id: end-of-file-fixer
+        name: end-of-file-fixer
+        entry: uv run end-of-file-fixer
+        language: system
+        types: [text]
+
+      - id: check-yaml
+        name: check-yaml
+        entry: uv run check-yaml
+        language: system
+        types: [yaml]
+
+      - id: check-added-large-files
+        name: check-added-large-files
+        entry: uv run check-added-large-files
+        language: system
+        args: ['--maxkb=20000']
+        types: [file]
+
+      - id: detect-private-key
+        name: detect-private-key
+        entry: uv run detect-private-key
+        language: system
+        types: [file]
+
+      - id: debug-statements
+        name: debug-statements
+        entry: uv run debug-statement-hook
+        language: system
+        types: [python]
+
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff (lint + fix)
+        entry: uv run ruff check --fix --no-cache
+        language: system
+        types: [python]
+
+      - id: ruff-format
+        name: ruff (format)
+        entry: uv run ruff format --no-cache
+        language: system
+        types: [python]
+
+      - id: mypy
+        name: mypy
+        entry: uv run mypy
+        language: system
+        types: [python]
+        require_serial: true
