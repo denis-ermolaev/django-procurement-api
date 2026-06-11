@@ -175,8 +175,15 @@ AUTH_USER_MODEL = "api.User"
 DJOSER = {
     "LOGIN_FIELD": "email",
     "USER_ID_FIELD": "pk",
+    "SEND_ACTIVATION_EMAIL": True,  # включить отправку писем активации
+    "ACTIVATION_URL": "activate/{uid}/{token}",  # шаблон пути на фронтенде
     "SERIALIZERS": {
-        "user_create": "api.serializers.CustomUserCreateSerializer",
-        # также можно переопределить user, current_user и т.д.
+        "user_create": "api.serializers.UserCreateSerializer",
+        "user": "api.serializers.UserSerializer",
+        "current_user": "api.serializers.UserSerializer",
     },
 }
+
+DEFAULT_FROM_EMAIL = "noreply@yourdomain.com"  # от кого письма
+
+EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"

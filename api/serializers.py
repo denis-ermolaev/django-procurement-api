@@ -1,9 +1,10 @@
 from djoser.serializers import UserCreateSerializer as BaseUserCreateSerializer
+from djoser.serializers import UserSerializer as BaseUserSerializer
 
 from .models import User
 
 
-class CustomUserCreateSerializer(BaseUserCreateSerializer):
+class UserCreateSerializer(BaseUserCreateSerializer):
     class Meta(BaseUserCreateSerializer.Meta):
         model = User
         fields = ("email", "password", "company", "position", "type")
@@ -15,3 +16,19 @@ class CustomUserCreateSerializer(BaseUserCreateSerializer):
                 "default": "buyer",
             },  # значение по умолчанию, если не передано
         }
+
+
+class UserSerializer(BaseUserSerializer):
+    class Meta(BaseUserSerializer.Meta):
+        model = User
+        fields = (
+            "id",
+            "email",
+            "username",
+            "first_name",
+            "last_name",
+            "company",
+            "position",
+            "type",
+            # "is_active",
+        )
