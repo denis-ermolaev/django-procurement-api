@@ -7,7 +7,15 @@ from .models import User
 class UserCreateSerializer(BaseUserCreateSerializer):
     class Meta(BaseUserCreateSerializer.Meta):
         model = User
-        fields = ("email", "password", "company", "position", "type")
+        fields = (
+            "first_name",
+            "last_name",
+            "email",
+            "password",
+            "company",
+            "position",
+            "type",
+        )
         extra_kwargs = {
             "company": {"required": False},
             "position": {"required": False},

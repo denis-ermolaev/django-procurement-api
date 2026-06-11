@@ -15,3 +15,7 @@ migrate:
 
 compose_without_build:
 	docker compose -f 'docker-compose.yml' up -d --no-build
+
+
+data_to_bd:
+	docker compose exec web python manage.py load_shop_data /app/data/shop1.yaml

@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 import django_stubs_ext
 from django.contrib.auth.models import AbstractUser
 
@@ -58,11 +60,12 @@ class User(AbstractUser):
     """
 
     REQUIRED_FIELDS = []
-    objects = UserManager()
+    objects: ClassVar[UserManager] = UserManager()
     USERNAME_FIELD = "email"
     email = models.EmailField(_("email address"), unique=True)
     company = models.CharField(verbose_name="Компания", max_length=40, blank=True)
     position = models.CharField(verbose_name="Должность", max_length=40, blank=True)
+
     username_validator = UnicodeUsernameValidator()
     username = models.CharField(
         _("username"),
@@ -80,7 +83,7 @@ class User(AbstractUser):
     )
     is_active = models.BooleanField(
         _("active"),
-        default=False,  # Потом подключить email и поставить на False
+        default=False,
         help_text=_(
             "Designates whether this user should be treated as active. "
             "Unselect this instead of deleting accounts."
@@ -100,3 +103,61 @@ class User(AbstractUser):
         verbose_name = "Пользователь"
         verbose_name_plural = "Список пользователей"
         ordering = ("email",)
+
+
+class Shop(models.Model):
+    name = models.CharField(max_length=150)
+    url = models.URLField()
+
+
+class Category(models.Model):
+    shops = models.ManyToManyField(Shop)
+    name = models.CharField(max_length=150)
+
+
+class Product(models.Model):
+    category = models.ForeignKey(Category, on_delete=models.CASCADE)
+    name = models.CharField(max_length=150)
+
+
+class ProductInfo(models.Model):
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE)
+    name = models.CharField(max_length=150)
+    quantity = models.IntegerField()
+    price = models.IntegerField()
+    price_rrc = models.IntegerField()
+
+
+class Parameter(models.Model):
+    name = models.CharField(max_length=150)
+
+
+class ProductParameter(models.Model):
+    product_info = models.ForeignKey(ProductInfo, on_delete=models.CASCADE)
+    parameter = models.ForeignKey(Parameter, on_delete=models.CASCADE)
+    value = models.CharField(max_length=200)
+
+
+class Order(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    dt = models.CharField(max_length=150)
+    status = models.CharField(max_length=150)  # Добавить варианты статуса для заказа
+
+
+class OrderItem(models.Model):
+    order = models.OneToOneField(Order, on_delete=models.CASCADE)
+    product = models.OneToOneField(Product, on_delete=models.CASCADE)
+    shop = models.OneToOneField(Shop, on_delete=models.CASCADE)
+    quantity = models.IntegerField()
+
+
+class Contact(models.Model):
+    type = models.CharField(
+        verbose_name="Тип пользователя",
+        choices=USER_TYPE_CHOICES,
+        max_length=5,
+        default="buyer",
+    )
+    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    value = models.CharField(max_length=200)
