@@ -7,6 +7,9 @@ requires-python = ">=3.10"
 dependencies = [
     "django>=5.2.15",
     "djangorestframework>=3.17.1",
+    "djangorestframework-simplejwt>=5.5.1",
+    "djoser>=2.3.3",
+    "drf-spectacular>=0.29.0",
     "psycopg2-binary>=2.9.12",
     "python-dotenv>=1.2.2",
 ]
@@ -31,7 +34,8 @@ django_settings_module = "core.settings"
 [tool.ty.environment]
 python-version = "3.10"
 [tool.ty.rules]
-all = "ignore" # Убрать проверку типов для ty
+invalid-method-override = "ignore"
+#all = "ignore" # Убрать проверку типов для ty
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 ignore = ["E501"]

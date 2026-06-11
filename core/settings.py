@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 import os
+from datetime import timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -43,6 +44,10 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
+    "djoser",
+    "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",
+    "drf_spectacular",
     "api",
 ]
 
@@ -131,3 +136,47 @@ STATIC_URL = "static/"
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": (
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+    ),
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_PERMISSION_CLASSES": (
+        "rest_framework.permissions.IsAuthenticated",  # Доступ только для авторизованных
+    ),
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Procurement API",  # Название вашего API
+    "DESCRIPTION": "API для управления закупками",  # Описание
+    "VERSION": "1.0.0",  # Версия API
+    "SERVE_INCLUDE_SCHEMA": False,  # Скрывает саму схему OpenAPI из UI
+    "SWAGGER_UI_SETTINGS": {
+        "persistAuthorization": True,  # не сбрасывать авторизацию
+    },
+    "SECURITY": [
+        {"BearerAuth": []}
+    ],  # Эта настройка делает BearerAuth стандартом для всех эндпоинтов
+}
+
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "AUTH_TOKEN_CLASSES": ("rest_framework_simplejwt.tokens.AccessToken",),
+}
+
+AUTH_USER_MODEL = "api.User"
+
+DJOSER = {
+    "LOGIN_FIELD": "email",
+    "USER_ID_FIELD": "pk",
+    "SERIALIZERS": {
+        "user_create": "api.serializers.CustomUserCreateSerializer",
+        # также можно переопределить user, current_user и т.д.
+    },
+}

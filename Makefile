@@ -7,3 +7,11 @@ pre-commit-install_host:
 
 requirements_host:
 	uv export --format requirements-txt > requirements.txt
+
+migrate:
+	docker compose exec web python manage.py makemigrations api
+	docker compose exec web python manage.py migrate
+
+
+compose_without_build:
+	docker compose -f 'docker-compose.yml' up -d --no-build
