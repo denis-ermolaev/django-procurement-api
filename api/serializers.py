@@ -1,7 +1,8 @@
 from djoser.serializers import UserCreateSerializer as BaseUserCreateSerializer
 from djoser.serializers import UserSerializer as BaseUserSerializer
+from rest_framework import serializers
 
-from .models import User
+from .models import Product, User
 
 
 class UserCreateSerializer(BaseUserCreateSerializer):
@@ -39,4 +40,16 @@ class UserSerializer(BaseUserSerializer):
             "position",
             "type",
             # "is_active",
+        )
+
+
+class ProductSerializer(serializers.ModelSerializer):
+    category = serializers.StringRelatedField()
+
+    class Meta(BaseUserSerializer.Meta):
+        model = Product
+        fields = (
+            "id",
+            "category",
+            "name",
         )

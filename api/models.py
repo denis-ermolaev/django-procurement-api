@@ -114,6 +114,9 @@ class Category(models.Model):
     shops = models.ManyToManyField(Shop)
     name = models.CharField(max_length=150)
 
+    def __str__(self):
+        return self.name
+
 
 class Product(models.Model):
     category = models.ForeignKey(Category, on_delete=models.CASCADE)
