@@ -74,6 +74,38 @@ class AddToBasketSerializer(serializers.Serializer):
 
 
 class ContactSerializer(serializers.ModelSerializer):
+    id = serializers.IntegerField(read_only=True)
+
     class Meta(BaseUserSerializer.Meta):
         model = Contact
-        fields = "__all__"
+        fields = (
+            "id",
+            "city",
+            "street",
+            "house",
+            "structure",
+            "building",
+            "apartment",
+            "phone",
+        )
+
+
+class OrderConfirmSerializer(serializers.Serializer):
+    order_id = serializers.IntegerField()
+    contact_id = serializers.IntegerField()
+
+
+class OrderHistorySerializer(serializers.ModelSerializer):
+    total_sum = serializers.SerializerMethodField()
+    number = serializers.IntegerField(source="id")  # номер заказа = id
+
+    class Meta:
+        model = Order
+        fields = ("number", "dt", "total_sum", "state")
+
+    def get_total_sum(self, obj):
+        # вычисляем сумму заказа: сумма (quantity * price) для всех OrderItem
+        total = 0
+        for item in obj.orderitem_set.select_related("product_info"):
+            total += item.quantity * item.product_info.price
+        return total

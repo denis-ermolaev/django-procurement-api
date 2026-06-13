@@ -1,5 +1,5 @@
 # Create your views here.
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_list_or_404, get_object_or_404
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.request import Request
@@ -10,6 +10,8 @@ from .models import Contact, Order, OrderItem, ProductInfo
 from .serializers import (
     AddToBasketSerializer,
     ContactSerializer,
+    OrderConfirmSerializer,
+    OrderHistorySerializer,
     OrderItemSerializer,
     ProductInfoSerializer,
 )
@@ -165,7 +167,10 @@ class ContactView(APIView):
 
     def get(self, request: Request):
         query = Contact.objects.filter(user=request.user)
-        serializer = self.serializer_class(query)
+
+        items = get_list_or_404(query)
+
+        serializer = self.serializer_class(items, many=True)
 
         return Response(
             data={
@@ -173,3 +178,62 @@ class ContactView(APIView):
             },
             status=200,
         )
+
+    def post(self, request: Request):
+        serializer = self.serializer_class(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        new_contact = Contact(user=request.user, **serializer.validated_data)
+        new_contact.save()
+
+        serializer = self.serializer_class(new_contact)
+        return Response(
+            data={
+                "data": serializer.data,
+            },
+            status=200,
+        )
+
+
+class OrderConfirmView(APIView):
+    @extend_schema(
+        request=OrderConfirmSerializer,
+        responses={
+            200: {"description": "Заказ подтверждён"},
+            400: {"description": "Ошибка валидации"},
+            404: {"description": "Заказ или контакт не найден"},
+        },
+    )
+    def post(self, request: Request):
+        serializer = OrderConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        order_id = serializer.validated_data["order_id"]
+        contact_id = serializer.validated_data["contact_id"]
+
+        # Проверяем, что заказ существует, принадлежит пользователю и имеет статус корзины
+        order = get_object_or_404(Order, id=order_id, user=request.user, state="basket")
+
+        # Проверяем, что контакт существует и принадлежит пользователю
+        contact = get_object_or_404(Contact, id=contact_id, user=request.user)
+
+        # Обновляем заказ: меняем статус и привязываем контакт
+        order.state = "confirmed"  # или 'new' — по вашей логике
+        order.contact = contact
+        order.save()
+
+        return Response({"status": "Order confirmed"}, status=200)
+
+
+class OrderHistoryView(APIView):
+    @extend_schema(
+        responses={
+            200: OrderHistorySerializer(many=True),
+        }
+    )
+    def get(self, request: Request):
+        orders = Order.objects.filter(user=request.user).exclude(
+            state="basket"
+        )  # исключаем корзины
+        serializer = OrderHistorySerializer(orders, many=True)
+        return Response(serializer.data, status=200)
