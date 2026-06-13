@@ -11,6 +11,17 @@ from django.utils.translation import gettext_lazy as _
 
 django_stubs_ext.monkeypatch()
 
+
+STATE_CHOICES = (
+    ("basket", "Статус корзины"),
+    ("new", "Новый"),
+    ("confirmed", "Подтвержден"),
+    ("assembled", "Собран"),
+    ("sent", "Отправлен"),
+    ("delivered", "Доставлен"),
+    ("canceled", "Отменен"),
+)
+
 USER_TYPE_CHOICES = (
     ("shop", "Магазин"),
     ("buyer", "Покупатель"),
@@ -114,9 +125,6 @@ class Category(models.Model):
     shops = models.ManyToManyField(Shop)
     name = models.CharField(max_length=150)
 
-    def __str__(self):
-        return self.name
-
 
 class Product(models.Model):
     category = models.ForeignKey(Category, on_delete=models.CASCADE)
@@ -142,25 +150,42 @@ class ProductParameter(models.Model):
     value = models.CharField(max_length=200)
 
 
+class Contact(models.Model):
+    user = models.ForeignKey(
+        User,
+        verbose_name="Пользователь",
+        related_name="contacts",
+        blank=True,
+        on_delete=models.CASCADE,
+    )
+
+    city = models.CharField(max_length=50, verbose_name="Город")
+    street = models.CharField(max_length=100, verbose_name="Улица")
+    house = models.CharField(max_length=15, verbose_name="Дом", blank=True)
+    structure = models.CharField(max_length=15, verbose_name="Корпус", blank=True)
+    building = models.CharField(max_length=15, verbose_name="Строение", blank=True)
+    apartment = models.CharField(max_length=15, verbose_name="Квартира", blank=True)
+    phone = models.CharField(max_length=20, verbose_name="Телефон")
+
+
 class Order(models.Model):
-    user = models.OneToOneField(User, on_delete=models.CASCADE)
-    dt = models.CharField(max_length=150)
-    status = models.CharField(max_length=150)  # Добавить варианты статуса для заказа
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    dt = models.DateTimeField(auto_now_add=True)
+    state = models.CharField(
+        verbose_name="Статус", choices=STATE_CHOICES, max_length=15
+    )
+    contact = models.ForeignKey(
+        Contact, verbose_name="Контакт", blank=True, null=True, on_delete=models.CASCADE
+    )
 
 
 class OrderItem(models.Model):
-    order = models.OneToOneField(Order, on_delete=models.CASCADE)
-    product = models.OneToOneField(Product, on_delete=models.CASCADE)
-    shop = models.OneToOneField(Shop, on_delete=models.CASCADE)
-    quantity = models.IntegerField()
-
-
-class Contact(models.Model):
-    type = models.CharField(
-        verbose_name="Тип пользователя",
-        choices=USER_TYPE_CHOICES,
-        max_length=5,
-        default="buyer",
+    order = models.ForeignKey(Order, on_delete=models.CASCADE)
+    product_info = models.ForeignKey(
+        ProductInfo,
+        verbose_name="Информация о продукте",
+        related_name="ordered_items",
+        blank=True,
+        on_delete=models.CASCADE,
     )
-    user = models.OneToOneField(User, on_delete=models.CASCADE)
-    value = models.CharField(max_length=200)
+    quantity = models.IntegerField()

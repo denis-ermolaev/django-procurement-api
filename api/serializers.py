@@ -2,7 +2,7 @@ from djoser.serializers import UserCreateSerializer as BaseUserCreateSerializer
 from djoser.serializers import UserSerializer as BaseUserSerializer
 from rest_framework import serializers
 
-from .models import Product, User
+from .models import Contact, Order, OrderItem, Product, ProductInfo, User
 
 
 class UserCreateSerializer(BaseUserCreateSerializer):
@@ -13,13 +13,9 @@ class UserCreateSerializer(BaseUserCreateSerializer):
             "last_name",
             "email",
             "password",
-            "company",
-            "position",
             "type",
         )
         extra_kwargs = {
-            "company": {"required": False},
-            "position": {"required": False},
             "type": {
                 "required": False,
                 "default": "buyer",
@@ -44,8 +40,6 @@ class UserSerializer(BaseUserSerializer):
 
 
 class ProductSerializer(serializers.ModelSerializer):
-    category = serializers.StringRelatedField()
-
     class Meta(BaseUserSerializer.Meta):
         model = Product
         fields = (
@@ -53,3 +47,33 @@ class ProductSerializer(serializers.ModelSerializer):
             "category",
             "name",
         )
+
+
+class ProductInfoSerializer(serializers.ModelSerializer):
+    class Meta(BaseUserSerializer.Meta):
+        model = ProductInfo
+        fields = "__all__"
+
+
+class OrderSerializer(serializers.ModelSerializer):
+    class Meta(BaseUserSerializer.Meta):
+        model = Order
+        fields = ("id", "user", "dt", "status")
+
+
+class OrderItemSerializer(serializers.ModelSerializer):
+    class Meta(BaseUserSerializer.Meta):
+        model = OrderItem
+        fields = "__all__"
+
+
+class AddToBasketSerializer(serializers.Serializer):
+    product_info_id = serializers.IntegerField()
+    order_id = serializers.IntegerField()
+    quantity = serializers.IntegerField()
+
+
+class ContactSerializer(serializers.ModelSerializer):
+    class Meta(BaseUserSerializer.Meta):
+        model = Contact
+        fields = "__all__"
