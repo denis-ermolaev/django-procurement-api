@@ -21,11 +21,13 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+    # Основное приложение
     path("api/", include("api.urls")),
+    # Авторизация
     path("api/auth/", include("djoser.urls")),
-    path("api/auth/", include("djoser.urls.jwt")),  # Эндпоинты для JWT
+    path("api/auth/", include("djoser.urls.jwt")),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
-    # 2. Эндпоинт для красивого и удобного Swagger UI
+    # Swagger UI
     path(
         "api/docs/",
         SpectacularSwaggerView.as_view(url_name="schema"),
