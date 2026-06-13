@@ -159,7 +159,6 @@ class BasketView(APIView):
         product_info.delete()
 
         return Response(status=204)
-        # TODO: добавить отправление ошибки, если удалить не получилось
 
 
 class ContactView(APIView):
@@ -197,6 +196,25 @@ class ContactView(APIView):
             },
             status=200,
         )
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                name="id",
+                type=int,
+                required=True,
+                location=OpenApiParameter.QUERY,
+                description="id информации доставки для удаления",
+            ),
+        ],
+    )
+    def delete(self, request: Request):
+        id = request.GET.get("id")
+
+        contact = get_object_or_404(Contact, id=id, user=request.user)
+        contact.delete()
+
+        return Response(status=204)
 
 
 class OrderConfirmView(APIView):
