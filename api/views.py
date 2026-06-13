@@ -218,7 +218,7 @@ class OrderConfirmView(APIView):
         contact = get_object_or_404(Contact, id=contact_id, user=request.user)
 
         # Обновляем заказ: меняем статус и привязываем контакт
-        order.state = "confirmed"  # или 'new' — по вашей логике
+        order.state = "confirmed"
         order.contact = contact
         order.save()
 

@@ -143,13 +143,13 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_PERMISSION_CLASSES": (
-        "rest_framework.permissions.IsAuthenticated",  # Доступ только для авторизованных
+        "rest_framework.permissions.IsAuthenticated",  # Доступ только для авторизованных по умолчанию
     ),
 }
 
 SPECTACULAR_SETTINGS = {
-    "TITLE": "Procurement API",  # Название вашего API
-    "DESCRIPTION": "API для управления закупками",  # Описание
+    "TITLE": "Procurement API",
+    "DESCRIPTION": "API для управления закупками",
     "VERSION": "1.0.0",  # Версия API
     "SERVE_INCLUDE_SCHEMA": False,  # Скрывает саму схему OpenAPI из UI
     "SWAGGER_UI_SETTINGS": {
@@ -162,8 +162,8 @@ SPECTACULAR_SETTINGS = {
 
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(days=1),
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=2),
+    "ACCESS_TOKEN_LIFETIME": timedelta(days=1),  # 15-30 минут
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=30),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
     "AUTH_HEADER_TYPES": ("Bearer",),
@@ -186,4 +186,4 @@ DJOSER = {
 
 DEFAULT_FROM_EMAIL = "noreply@yourdomain.com"  # от кого письма
 
-EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"  # Письма в консоль
