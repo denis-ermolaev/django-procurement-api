@@ -1,7 +1,6 @@
 [project]
 name = "django-procurement-api"
 version = "0.1.0"
-description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -14,7 +13,6 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "pyyaml>=6.0.3",
 ]
-
 [dependency-groups]
 dev = [
     "django-stubs[compatible-mypy]>=6.0.5",
@@ -25,6 +23,7 @@ dev = [
     "ty>=0.0.46",
     "uv>=0.11.16",
 ]
+# mypy - type checker с совместимостью с django
 [tool.mypy]
 python_version = "3.10"
 plugins = ["mypy_django_plugin.main"]
@@ -32,11 +31,12 @@ ignore_missing_imports = true
 cache_dir = "/dev/null"
 [tool.django-stubs]
 django_settings_module = "core.settings"
+# ty - как языковой сервер
 [tool.ty.environment]
 python-version = "3.10"
 [tool.ty.rules]
 invalid-method-override = "ignore"
-#all = "ignore" # Убрать проверку типов для ty
+# ruff - линтер, форматтер, сортировка импортов
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 ignore = ["E501"]

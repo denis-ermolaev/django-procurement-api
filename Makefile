@@ -1,3 +1,4 @@
+## Запустить pre-commit хуки
 pre-commit_host:
 	uv run pre-commit run --all-files
 
@@ -5,17 +6,15 @@ pre-commit_host:
 pre-commit-install_host:
 	uv run pre-commit install
 
-requirements_host:
-	uv export --format requirements-txt > requirements.txt
-
+## (миграции) Создание структуры БД
 migrate:
 	docker compose exec web python manage.py makemigrations api
 	docker compose exec web python manage.py migrate
 
-
-compose_without_build:
-	docker compose -f 'docker-compose.yml' up -d --no-build
-
-
+## Загрузить первоначальные данные в БД
 data_to_bd:
 	docker compose exec web python manage.py load_shop_data /app/data/shop1.yaml
+
+## Запустить докер без скачивания и проверки
+compose_without_build:
+	docker compose -f 'docker-compose.yml' up -d --no-build

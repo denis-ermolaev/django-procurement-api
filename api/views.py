@@ -17,15 +17,11 @@ from .serializers import (
 )
 
 
-class CheckView(APIView):
-    def get(self, _: Request):
-        return Response(
-            data={"message": "API успешно запущено и работает."},
-            status=200,
-        )
-
-
 class ProductListView(APIView):
+    """
+    Просмотр списка продуктов
+    """
+
     serializer_class = ProductInfoSerializer
 
     class Pagination(PageNumberPagination):
@@ -62,6 +58,10 @@ class ProductListView(APIView):
 
 
 class BasketView(APIView):
+    """
+    Взаимодействие с корзиной
+    """
+
     # serializer_class = CapsulesSerializer
     @extend_schema(
         responses={
@@ -163,6 +163,10 @@ class BasketView(APIView):
 
 
 class ContactView(APIView):
+    """
+    Взаимодействие с адресом доставки
+    """
+
     serializer_class = ContactSerializer
 
     def get(self, request: Request):
@@ -196,6 +200,10 @@ class ContactView(APIView):
 
 
 class OrderConfirmView(APIView):
+    """
+    Подтверждение заказа
+    """
+
     @extend_schema(
         request=OrderConfirmSerializer,
         responses={
@@ -226,6 +234,10 @@ class OrderConfirmView(APIView):
 
 
 class OrderHistoryView(APIView):
+    """
+    История заказов
+    """
+
     @extend_schema(
         responses={
             200: OrderHistorySerializer(many=True),

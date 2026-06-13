@@ -5,6 +5,7 @@ from rest_framework import serializers
 from .models import Contact, Order, OrderItem, Product, ProductInfo, User
 
 
+# 1. Model ----
 class UserCreateSerializer(BaseUserCreateSerializer):
     class Meta(BaseUserCreateSerializer.Meta):
         model = User
@@ -67,12 +68,6 @@ class OrderItemSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
-class AddToBasketSerializer(serializers.Serializer):
-    product_info_id = serializers.IntegerField()
-    order_id = serializers.IntegerField()
-    quantity = serializers.IntegerField()
-
-
 class ContactSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(read_only=True)
 
@@ -88,6 +83,13 @@ class ContactSerializer(serializers.ModelSerializer):
             "apartment",
             "phone",
         )
+
+
+# 2. Other ----
+class AddToBasketSerializer(serializers.Serializer):
+    product_info_id = serializers.IntegerField()
+    order_id = serializers.IntegerField()
+    quantity = serializers.IntegerField()
 
 
 class OrderConfirmSerializer(serializers.Serializer):

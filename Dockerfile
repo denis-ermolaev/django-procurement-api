@@ -15,13 +15,13 @@ ENV UV_PYTHON=3.10 \
     UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/opt/venv
 
-# Установка Python-окружения по lock-файлу
+# Установка Python-окружения
 COPY pyproject.toml uv.lock* ./
 RUN uv sync --no-install-project
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Указываем порт, который будет слушать приложение
+# Порт
 EXPOSE 8000
 
-# Команда для запуска сервера разработки (в production позже заменим на Gunicorn)
+# Команда для запуска сервера разработки
 CMD ["uv", "run", "manage.py", "runserver", "0.0.0.0:8000"]

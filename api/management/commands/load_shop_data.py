@@ -15,11 +15,11 @@ class Command(BaseCommand):
         with open(file_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
-        # 1. Создаём магазин
+        # 1. Создаём магазин ----
         shop_name = data["shop"]
         shop, _ = Shop.objects.get_or_create(name=shop_name)
 
-        # 2. Создаём категории и связываем с магазином
+        # 2. Создаём категории и связываем с магазином ----
         cat_by_id = {}  # словарь: исходный id -> объект Category
         for cat_data in data["categories"]:
             cat_id = cat_data["id"]
@@ -28,7 +28,7 @@ class Command(BaseCommand):
             category.shops.add(shop)
             cat_by_id[cat_id] = category
 
-        # 3. Товары и ProductInfo
+        # 3. Товары и ProductInfo ----
         for good in data["goods"]:
             # Категория по исходному id
             cat_id = good["category"]
@@ -39,7 +39,7 @@ class Command(BaseCommand):
                 )
                 continue
 
-            # Product: используем поле model как уникальный идентификатор
+            # Product
             name_code = good["name"]
             product, _ = Product.objects.get_or_create(
                 name=name_code, defaults={"category": category}
@@ -55,7 +55,7 @@ class Command(BaseCommand):
                 price_rrc=good["price_rrc"],
             )
 
-            # Параметры товара
+            # Parameter
             for param_name, param_value in good.get("parameters", {}).items():
                 parameter, _ = Parameter.objects.get_or_create(name=param_name)
                 ProductParameter.objects.create(

@@ -12,6 +12,7 @@ from django.utils.translation import gettext_lazy as _
 django_stubs_ext.monkeypatch()
 
 
+# 1. Константы ----
 STATE_CHOICES = (
     ("basket", "Статус корзины"),
     ("new", "Новый"),
@@ -28,7 +29,7 @@ USER_TYPE_CHOICES = (
 )
 
 
-# Create your models here.
+# 2. Модели авторизации ----
 class UserManager(BaseUserManager):
     """
     Миксин для управления пользователями
@@ -116,6 +117,7 @@ class User(AbstractUser):
         ordering = ("email",)
 
 
+# 3. Модели api ----
 class Shop(models.Model):
     name = models.CharField(max_length=150)
     url = models.URLField()
