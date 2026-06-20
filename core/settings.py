@@ -188,3 +188,9 @@ DJOSER = {
 DEFAULT_FROM_EMAIL = "noreply@yourdomain.com"  # от кого письма
 
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"  # Письма в консоль
+
+# E-mail администраторов, им присылается смс при подтверждением заказа от пользователя
+ADMIN_EMAILS = [
+    "admin1@example.com",
+    "admin2@example.com",
+]

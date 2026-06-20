@@ -5,6 +5,8 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from api.management.email_service import send_order_confirmation
+
 from .filters import ProductFilter
 from .models import Contact, Order, OrderItem, Product, ProductInfo
 from .serializers import (
@@ -313,6 +315,8 @@ class OrderConfirmView(APIView):
         order.state = "confirmed"
         order.contact = contact
         order.save()
+
+        send_order_confirmation(order)
 
         return Response({"status": "Order confirmed"}, status=200)
 
