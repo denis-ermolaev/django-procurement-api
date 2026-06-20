@@ -1,4 +1,3 @@
-# Create your views here.
 from django.shortcuts import get_list_or_404, get_object_or_404
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework.pagination import PageNumberPagination
@@ -6,7 +5,8 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Contact, Order, OrderItem, ProductInfo
+from .filters import ProductFilter
+from .models import Contact, Order, OrderItem, Product, ProductInfo
 from .serializers import (
     AddToBasketSerializer,
     ContactSerializer,
@@ -43,23 +43,71 @@ class ProductListView(APIView):
                 location=OpenApiParameter.QUERY,
                 description="От 5 до 100, кол-во данных на страницу",
             ),
+            # Добавляем параметры фильтрации
+            OpenApiParameter(
+                name="search",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Поиск по названию товара (регистронезависимый)",
+            ),
+            OpenApiParameter(
+                name="category_id",
+                type=int,
+                location=OpenApiParameter.QUERY,
+                description="ID категории",
+            ),
+            OpenApiParameter(
+                name="shop_id",
+                type=int,
+                location=OpenApiParameter.QUERY,
+                description="ID магазина, в котором должен быть товар в наличии",
+            ),
+            OpenApiParameter(
+                name="price_min",
+                type=int,
+                location=OpenApiParameter.QUERY,
+                description="Минимальная цена товара (в любом магазине)",
+            ),
+            OpenApiParameter(
+                name="price_max",
+                type=int,
+                location=OpenApiParameter.QUERY,
+                description="Максимальная цена товара (в любом магазине)",
+            ),
+            OpenApiParameter(
+                name="parameter",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Фильтр по параметру в формате 'имя_параметра:значение', например: 'цвет:красный'",
+            ),
         ]
     )
     # 1. Список продуктов ----
     def get(self, request: Request):
-        # TODO: фильтрация и поиск
-        pagination = self.Pagination()
+        queryset = Product.objects.all()
 
-        product_info_list = ProductInfo.objects.all()
-        queryset = pagination.paginate_queryset(
-            queryset=product_info_list, request=request
-        )
+        # Применяем фильтрацию
+        filter_set = ProductFilter(request.query_params, queryset=queryset)
+        if not filter_set.is_valid():
+            return Response(filter_set.errors, status=400)
+        queryset = filter_set.qs
 
-        serializer_product_info = self.serializer_class(queryset, many=True)
-        return pagination.get_paginated_response(serializer_product_info.data)
+        # Пагинация
+        paginator = self.Pagination()
+        page = paginator.paginate_queryset(queryset, request)
+        serializer = self.serializer_class(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
 
-# 2. Корзина ----
+# 2. Детальная информация о продукте ----
+class ProductDetailView(APIView):
+    def get(self, _, pk):
+        product_info = get_object_or_404(ProductInfo, pk=pk)
+        serializer = ProductInfoSerializer(product_info)
+        return Response(serializer.data)
+
+
+# 3. Корзина ----
 class BasketView(APIView):
     """
     Взаимодействие с корзиной
@@ -82,7 +130,7 @@ class BasketView(APIView):
             }
         }
     )
-    ## 2.1. Получить корзину ----
+    ## 3.1. Получить корзину ----
     def get(self, request: Request):
         orders = Order.objects.filter(
             user=request.user,
@@ -106,7 +154,7 @@ class BasketView(APIView):
     @extend_schema(
         request=AddToBasketSerializer,
     )
-    ## 2.2. Добавить товар в корзину ----
+    ## 3.2. Добавить товар в корзину ----
     def post(self, request: Request):
         serializer = AddToBasketSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -161,7 +209,7 @@ class BasketView(APIView):
             ),
         ],
     )
-    ## 2.3. Удалить товар из корзины ----
+    ## 3.3. Удалить товар из корзины ----
     def delete(self, request: Request):
         product_info_id = request.GET.get("product_info_id")
         order_id = request.GET.get("order_id")
@@ -174,7 +222,7 @@ class BasketView(APIView):
         return Response(status=204)
 
 
-# 3. Взаимодействие с адресом доставки ----
+# 4. Взаимодействие с адресом доставки ----
 class ContactView(APIView):
     """
     Взаимодействие с адресом доставки
@@ -231,7 +279,7 @@ class ContactView(APIView):
         return Response(status=204)
 
 
-# 4. Подтверждение заказа (изменение его статуса) ----
+# 5. Подтверждение заказа (изменение его статуса) ----
 class OrderConfirmView(APIView):
     """
     Подтверждение заказа
@@ -266,11 +314,16 @@ class OrderConfirmView(APIView):
         return Response({"status": "Order confirmed"}, status=200)
 
 
-# 5. История заказов ----
-class OrderHistoryView(APIView):
+# 6. Список заказов (история заказов) ----
+class OrderListView(APIView):
     """
     История заказов
     """
+
+    class Pagination(PageNumberPagination):
+        page_size = 5
+        page_size_query_param = "page_size"
+        max_page_size = 100
 
     @extend_schema(
         responses={
@@ -278,11 +331,21 @@ class OrderHistoryView(APIView):
         }
     )
     def get(self, request: Request):
+        pagination = self.Pagination()
         orders = Order.objects.filter(user=request.user).exclude(
             state="basket"
         )  # исключаем корзины
-        serializer = OrderHistorySerializer(orders, many=True)
-        return Response(serializer.data, status=200)
+        queryset = pagination.paginate_queryset(queryset=orders, request=request)
+        serializer = OrderHistorySerializer(queryset, many=True)
+        return pagination.get_paginated_response(serializer.data)
+
+
+# 2. Детальная информация о продукте ----
+class OrderDetailView(APIView):
+    def get(self, _, pk):
+        order = get_object_or_404(Order, pk=pk)
+        serializer = ProductInfoSerializer(order)
+        return Response(serializer.data)
 
 
 # TODO: Поставщик:
