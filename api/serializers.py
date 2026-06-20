@@ -59,7 +59,7 @@ class ProductInfoSerializer(serializers.ModelSerializer):
 class OrderSerializer(serializers.ModelSerializer):
     class Meta(BaseUserSerializer.Meta):
         model = Order
-        fields = ("id", "user", "dt", "status")
+        fields = ("id", "user", "dt", "state")
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
@@ -98,11 +98,10 @@ class OrderConfirmSerializer(serializers.Serializer):
 
 class OrderHistorySerializer(serializers.ModelSerializer):
     total_sum = serializers.SerializerMethodField()
-    number = serializers.IntegerField(source="id")  # номер заказа = id
 
     class Meta:
         model = Order
-        fields = ("number", "dt", "total_sum", "state")
+        fields = ("id", "dt", "total_sum", "state")
 
     def get_total_sum(self, obj):
         # вычисляем сумму заказа: сумма (quantity * price) для всех OrderItem
@@ -110,3 +109,15 @@ class OrderHistorySerializer(serializers.ModelSerializer):
         for item in obj.orderitem_set.select_related("product_info"):
             total += item.quantity * item.product_info.price
         return total
+
+
+class OrderUpdateSerializer(serializers.ModelSerializer):
+    state = serializers.ChoiceField(
+        choices=[
+            "new",
+        ]
+    )
+
+    class Meta:
+        model = Order
+        fields = ["state"]

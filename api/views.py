@@ -13,7 +13,10 @@ from .serializers import (
     OrderConfirmSerializer,
     OrderHistorySerializer,
     OrderItemSerializer,
+    OrderSerializer,
+    OrderUpdateSerializer,
     ProductInfoSerializer,
+    ProductSerializer,
 )
 
 
@@ -22,7 +25,7 @@ class ProductListView(APIView):
     Просмотр списка продуктов
     """
 
-    serializer_class = ProductInfoSerializer
+    serializer_class = ProductSerializer
 
     class Pagination(PageNumberPagination):
         page_size = 5
@@ -344,8 +347,24 @@ class OrderListView(APIView):
 class OrderDetailView(APIView):
     def get(self, _, pk):
         order = get_object_or_404(Order, pk=pk)
-        serializer = ProductInfoSerializer(order)
+        serializer = OrderSerializer(order)
         return Response(serializer.data)
+
+    @extend_schema(
+        request=OrderUpdateSerializer,
+        responses={
+            200: OrderSerializer,
+            400: {"description": "Ошибка валидации"},
+            404: {"description": "Заказ не найден"},
+        },
+    )
+    def patch(self, request, pk):
+        order = get_object_or_404(Order, pk=pk, user=request.user)
+        serializer = OrderUpdateSerializer(order, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        # Возвращаем полную информацию обновлённого заказа
+        return Response(OrderSerializer(order).data, status=200)
 
 
 # TODO: Поставщик:
