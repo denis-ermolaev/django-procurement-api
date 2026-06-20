@@ -46,6 +46,7 @@ class ProductListView(APIView):
         ]
     )
     def get(self, request: Request):
+        # TODO: фильтрация и поиск
         pagination = self.Pagination()
 
         product_info_list = ProductInfo.objects.all()
@@ -80,12 +81,18 @@ class BasketView(APIView):
         }
     )
     def get(self, request: Request):
-        orders = Order.objects.filter(user=request.user)
+        orders = Order.objects.filter(
+            user=request.user,
+            state="basket",
+        )
         result = []
         for order in orders:
             result.append(
                 OrderItemSerializer(
-                    OrderItem.objects.filter(order=order), many=True
+                    OrderItem.objects.filter(
+                        order=order,
+                    ),
+                    many=True,
                 ).data
             )
         return Response(
@@ -101,26 +108,28 @@ class BasketView(APIView):
         serializer.is_valid(raise_exception=True)
 
         product_info_id = serializer.validated_data["product_info_id"]
-        order_id = serializer.validated_data["order_id"]
         quantity = serializer.validated_data["quantity"]
 
         # TODO: Если quantity больше, чем товаров в наличии -> ошибка
         order, _ = Order.objects.get_or_create(
-            id=order_id,
             user=request.user,
+            state="basket",
             defaults={"state": "basket"},  # поля, которые заполнятся при создании
         )
 
-        # Получение товара и product_info
         product_info = ProductInfo.objects.get(id=product_info_id)
 
-        # TODO: При повторном добавлении увеличивать quantity
-        # а не добавлять новую запись
-        order_item = OrderItem.objects.create(
+        order_item, created = OrderItem.objects.get_or_create(
             order=order,
             product_info=product_info,
-            quantity=quantity,
+            defaults={"quantity": quantity},
         )
+
+        if not created:
+            # Если позиция уже была – увеличиваем количество
+            order_item.quantity += quantity
+            order_item.save()
+
         serializer = OrderItemSerializer(order_item)
 
         return Response(
@@ -148,7 +157,6 @@ class BasketView(APIView):
             ),
         ],
     )
-    # TODO: передеавать id через url по REST ?
     def delete(self, request: Request):
         product_info_id = request.GET.get("product_info_id")
         order_id = request.GET.get("order_id")
@@ -267,3 +275,13 @@ class OrderHistoryView(APIView):
         )  # исключаем корзины
         serializer = OrderHistorySerializer(orders, many=True)
         return Response(serializer.data, status=200)
+
+
+# TODO: Поставщик:
+# через API информирует сервис об обновлении прайса,
+# может включать и отключать приём заказов,
+# может получать список оформленных заказов (с товарами из его прайса).
+
+
+# TODO: отправка накладной на email администратора (для исполнения заказа),
+# TODO: отправка заказа на email клиента (подтверждение приёма заказа).

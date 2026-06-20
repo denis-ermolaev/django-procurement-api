@@ -88,7 +88,6 @@ class ContactSerializer(serializers.ModelSerializer):
 # 2. Other ----
 class AddToBasketSerializer(serializers.Serializer):
     product_info_id = serializers.IntegerField()
-    order_id = serializers.IntegerField()
     quantity = serializers.IntegerField()
 
 
