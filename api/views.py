@@ -45,6 +45,7 @@ class ProductListView(APIView):
             ),
         ]
     )
+    # 1. Список продуктов ----
     def get(self, request: Request):
         # TODO: фильтрация и поиск
         pagination = self.Pagination()
@@ -58,6 +59,7 @@ class ProductListView(APIView):
         return pagination.get_paginated_response(serializer_product_info.data)
 
 
+# 2. Корзина ----
 class BasketView(APIView):
     """
     Взаимодействие с корзиной
@@ -80,6 +82,7 @@ class BasketView(APIView):
             }
         }
     )
+    ## 2.1. Получить корзину ----
     def get(self, request: Request):
         orders = Order.objects.filter(
             user=request.user,
@@ -103,6 +106,7 @@ class BasketView(APIView):
     @extend_schema(
         request=AddToBasketSerializer,
     )
+    ## 2.2. Добавить товар в корзину ----
     def post(self, request: Request):
         serializer = AddToBasketSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -157,6 +161,7 @@ class BasketView(APIView):
             ),
         ],
     )
+    ## 2.3. Удалить товар из корзины ----
     def delete(self, request: Request):
         product_info_id = request.GET.get("product_info_id")
         order_id = request.GET.get("order_id")
@@ -169,6 +174,7 @@ class BasketView(APIView):
         return Response(status=204)
 
 
+# 3. Взаимодействие с адресом доставки ----
 class ContactView(APIView):
     """
     Взаимодействие с адресом доставки
@@ -225,6 +231,7 @@ class ContactView(APIView):
         return Response(status=204)
 
 
+# 4. Подтверждение заказа (изменение его статуса) ----
 class OrderConfirmView(APIView):
     """
     Подтверждение заказа
@@ -259,6 +266,7 @@ class OrderConfirmView(APIView):
         return Response({"status": "Order confirmed"}, status=200)
 
 
+# 5. История заказов ----
 class OrderHistoryView(APIView):
     """
     История заказов
