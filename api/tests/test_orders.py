@@ -100,6 +100,9 @@ class OrderAPITests(APITestCase):
 
     def test_order_detail_is_available_only_to_owner(self) -> None:
         own_order = Order.objects.create(user=self.user, state="confirmed")
+        own_item = OrderItem.objects.create(
+            order=own_order, product_info=self.product_info, quantity=2
+        )
         other_order = Order.objects.create(user=self.other_user, state="confirmed")
         self.authenticate()
 
@@ -110,16 +113,29 @@ class OrderAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["id"], own_order.pk)
+        self.assertEqual(response.data["total_sum"], 200)
+        self.assertEqual(response.data["items"][0]["id"], own_item.pk)
+        self.assertEqual(
+            response.data["items"][0]["product_info"], self.product_info.pk
+        )
         self.assertEqual(forbidden_response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_order_patch_validates_state_and_checks_ownership(self) -> None:
         own_order = Order.objects.create(user=self.user, state="confirmed")
+        own_item = OrderItem.objects.create(
+            order=own_order, product_info=self.product_info, quantity=1
+        )
         other_order = Order.objects.create(user=self.other_user, state="confirmed")
         self.authenticate()
 
         invalid_response = self.api_client.patch(
             reverse("order-detail", args=[own_order.pk]),
-            {"state": "delivered"},
+            {"state": "archived"},
+            format="json",
+        )
+        basket_response = self.api_client.patch(
+            reverse("order-detail", args=[own_order.pk]),
+            {"state": "basket"},
             format="json",
         )
         forbidden_response = self.api_client.patch(
@@ -129,15 +145,17 @@ class OrderAPITests(APITestCase):
         )
         response = self.api_client.patch(
             reverse("order-detail", args=[own_order.pk]),
-            {"state": "new"},
+            {"state": "delivered"},
             format="json",
         )
 
         self.assertEqual(invalid_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(basket_response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(forbidden_response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["items"][0]["id"], own_item.pk)
         own_order.refresh_from_db()
-        self.assertEqual(own_order.state, "new")
+        self.assertEqual(own_order.state, "delivered")
 
     @override_settings(
         EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",

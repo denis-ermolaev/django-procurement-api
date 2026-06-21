@@ -26,9 +26,9 @@ from .serializers import (
     ErrorDetailSerializer,
     OrderConfirmResponseSerializer,
     OrderConfirmSerializer,
+    OrderDetailSerializer,
     OrderHistorySerializer,
     OrderItemSerializer,
-    OrderSerializer,
     OrderUpdateSerializer,
     PaginatedOrderHistoryResponseSerializer,
     PaginatedProductResponseSerializer,
@@ -49,12 +49,9 @@ VALIDATION_ERROR_RESPONSE = OpenApiResponse(
     response=OpenApiTypes.OBJECT,
     description="Ошибка валидации. Ответ содержит поля запроса и список ошибок по каждому полю.",
 )
-BASKET_LIST_RESPONSE_SCHEMA = {
+BASKET_RESPONSE_SCHEMA = {
     "type": "array",
-    "items": {
-        "type": "array",
-        "items": {"$ref": "#/components/schemas/OrderItem"},
-    },
+    "items": {"$ref": "#/components/schemas/OrderItem"},
 }
 
 
@@ -243,31 +240,39 @@ class BasketView(APIView):
 
     serializer_class = OrderItemSerializer
 
+    def get_current_basket(self, request: Request, *, create: bool = False):
+        order = (
+            Order.objects.filter(user=request.user, state="basket")
+            .order_by("id")
+            .first()
+        )
+        if order is None and create:
+            order = Order.objects.create(user=request.user, state="basket")
+        return order
+
     @extend_schema(
         operation_id="basket_retrieve",
         summary="Получить корзину",
         description=(
-            "Возвращает все заказы текущего пользователя в статусе basket. "
-            "Фактический формат ответа: массив заказов, где каждый заказ представлен "
-            "массивом позиций OrderItem. Если корзина пуста, возвращается пустой массив."
+            "Возвращает позиции текущей корзины пользователя. Текущая корзина - первый "
+            "заказ пользователя в статусе basket. Если корзины нет или она пуста, "
+            "возвращается пустой массив."
         ),
         tags=["Basket"],
         responses={
             200: OpenApiResponse(
-                response=BASKET_LIST_RESPONSE_SCHEMA,
-                description="Список корзин и их позиций.",
+                response=BASKET_RESPONSE_SCHEMA,
+                description="Позиции текущей корзины.",
                 examples=[
                     OpenApiExample(
                         "Корзина с одной позицией",
                         value=[
-                            [
-                                {
-                                    "id": 1,
-                                    "quantity": 2,
-                                    "order": 1,
-                                    "product_info": 1,
-                                }
-                            ]
+                            {
+                                "id": 1,
+                                "quantity": 2,
+                                "order": 1,
+                                "product_info": 1,
+                            }
                         ],
                         response_only=True,
                     ),
@@ -283,18 +288,14 @@ class BasketView(APIView):
     )
     ## 3.1. Получить корзину ----
     def get(self, request: Request):
-        orders = Order.objects.filter(
-            user=request.user,
-            state="basket",
-        ).order_by("id")
-        result = []
-        for order in orders:
-            result.append(
-                OrderItemSerializer(
-                    OrderItem.objects.filter(order=order),
-                    many=True,
-                ).data
-            )
+        order = self.get_current_basket(request)
+        if order is None:
+            return Response(data=[], status=200)
+
+        result = OrderItemSerializer(
+            OrderItem.objects.filter(order=order).order_by("id"),
+            many=True,
+        ).data
         return Response(
             data=result,
             status=200,
@@ -347,7 +348,7 @@ class BasketView(APIView):
         quantity = serializer.validated_data["quantity"]
 
         product_info = get_object_or_404(ProductInfo, id=product_info_id)
-        order = Order.objects.filter(user=request.user, state="basket").first()
+        order = self.get_current_basket(request)
         current_quantity = 0
         if order:
             current_quantity = (
@@ -369,7 +370,7 @@ class BasketView(APIView):
             )
 
         if not order:
-            order = Order.objects.create(user=request.user, state="basket")
+            order = self.get_current_basket(request, create=True)
 
         order_item, created = OrderItem.objects.get_or_create(
             order=order,
@@ -395,15 +396,16 @@ class BasketView(APIView):
         summary="Удалить позицию из корзины",
         description=(
             "Удаляет позицию OrderItem из корзины текущего пользователя. "
-            "Основной параметр для удаления: item_id. Старое имя product_info_id "
-            "временно поддерживается как алиас для обратной совместимости."
+            "Основной параметр для удаления: item_id. order_id можно передать "
+            "дополнительно для строгой проверки корзины. Старое имя product_info_id "
+            "временно поддерживается как алиас item_id для обратной совместимости."
         ),
         tags=["Basket"],
         parameters=[
             OpenApiParameter(
                 name="item_id",
                 type=OpenApiTypes.INT,
-                required=False,
+                required=True,
                 location=OpenApiParameter.QUERY,
                 description="ID позиции корзины OrderItem, которую нужно удалить.",
             ),
@@ -417,9 +419,9 @@ class BasketView(APIView):
             OpenApiParameter(
                 name="order_id",
                 type=OpenApiTypes.INT,
-                required=True,
+                required=False,
                 location=OpenApiParameter.QUERY,
-                description="ID заказа-корзины, из которого удаляется позиция.",
+                description="Опциональный ID заказа-корзины для дополнительной проверки.",
             ),
         ],
         responses={
@@ -433,15 +435,21 @@ class BasketView(APIView):
     def delete(self, request: Request):
         serializer = DeleteBasketItemSerializer(data=request.query_params)
         serializer.is_valid(raise_exception=True)
-        order_id = serializer.validated_data["order_id"]
+        order_id = serializer.validated_data.get("order_id")
         item_id = (
             serializer.validated_data.get("item_id")
             or serializer.validated_data["product_info_id"]
         )
 
-        order = get_object_or_404(Order, id=order_id, user=request.user, state="basket")
+        item_filters = {
+            "id": item_id,
+            "order__user": request.user,
+            "order__state": "basket",
+        }
+        if order_id:
+            item_filters["order_id"] = order_id
 
-        order_item = get_object_or_404(OrderItem, id=item_id, order=order)
+        order_item = get_object_or_404(OrderItem, **item_filters)
         order_item.delete()
 
         return Response(status=204)
@@ -726,7 +734,7 @@ class OrderListView(APIView):
 
 # 7. Детальная информация о заказе ----
 class OrderDetailView(APIView):
-    serializer_class = OrderSerializer
+    serializer_class = OrderDetailSerializer
 
     @extend_schema(
         operation_id="order_retrieve",
@@ -735,8 +743,8 @@ class OrderDetailView(APIView):
         tags=["Orders"],
         responses={
             200: OpenApiResponse(
-                response=OrderSerializer,
-                description="Данные заказа.",
+                response=OrderDetailSerializer,
+                description="Данные заказа и его позиции.",
                 examples=[
                     OpenApiExample(
                         "Заказ",
@@ -745,6 +753,16 @@ class OrderDetailView(APIView):
                             "user": 2,
                             "dt": "2026-06-21T16:40:31.083167Z",
                             "state": "confirmed",
+                            "contact": 3,
+                            "total_sum": 220000,
+                            "items": [
+                                {
+                                    "id": 10,
+                                    "quantity": 2,
+                                    "order": 1,
+                                    "product_info": 1,
+                                }
+                            ],
                         },
                         response_only=True,
                     )
@@ -757,21 +775,21 @@ class OrderDetailView(APIView):
     ## 7.1. Получить заказ ----
     def get(self, request: Request, pk):
         order = get_object_or_404(Order, pk=pk, user=request.user)
-        serializer = OrderSerializer(order)
+        serializer = self.serializer_class(order)
         return Response(serializer.data)
 
     @extend_schema(
         operation_id="order_update",
         summary="Обновить заказ",
         description=(
-            "Частично обновляет заказ текущего пользователя. Текущая serializer-валидация "
-            "разрешает передать только state=new."
+            "Частично обновляет статус заказа текущего пользователя. Разрешены "
+            "бизнес-статусы заказа, кроме basket."
         ),
         tags=["Orders"],
         request=OrderUpdateSerializer,
         responses={
             200: OpenApiResponse(
-                response=OrderSerializer,
+                response=OrderDetailSerializer,
                 description="Обновленный заказ.",
                 examples=[
                     OpenApiExample(
@@ -780,7 +798,17 @@ class OrderDetailView(APIView):
                             "id": 1,
                             "user": 2,
                             "dt": "2026-06-21T16:40:31.083167Z",
-                            "state": "new",
+                            "state": "delivered",
+                            "contact": 3,
+                            "total_sum": 220000,
+                            "items": [
+                                {
+                                    "id": 10,
+                                    "quantity": 2,
+                                    "order": 1,
+                                    "product_info": 1,
+                                }
+                            ],
                         },
                         response_only=True,
                     )
@@ -797,7 +825,7 @@ class OrderDetailView(APIView):
         serializer = OrderUpdateSerializer(order, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        return Response(OrderSerializer(order).data, status=200)
+        return Response(self.serializer_class(order).data, status=200)
 
 
 # 8. Запланированные расширения ----

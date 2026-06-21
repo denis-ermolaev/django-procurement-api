@@ -92,7 +92,7 @@ docker compose exec web python manage.py createsuperuser
 - `GET /api/products/{id}/` - детальная информация о предложении `ProductInfo`.
 - `GET /api/basket/` - текущая корзина пользователя.
 - `POST /api/basket/` - добавить предложение в корзину.
-- `DELETE /api/basket/?order_id=<id>&item_id=<id>` - удалить позицию корзины.
+- `DELETE /api/basket/?item_id=<id>` - удалить позицию текущей корзины.
 - `GET /api/contact/` - список адресов доставки; пустой список возвращается как `{"data": []}`.
 - `POST /api/contact/` - создать адрес доставки.
 - `DELETE /api/contact/?id=<id>` - удалить адрес доставки.
@@ -190,4 +190,3 @@ make schema_validate_host
 
 - Поставщик пока не управляет прайсом через API; загрузка выполняется management command.
 - Email backend по умолчанию выводит письма в консоль.
-- PATCH заказа сейчас разрешает только переход в статус `new`.

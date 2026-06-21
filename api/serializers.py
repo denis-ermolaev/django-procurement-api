@@ -4,7 +4,7 @@ from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
-from .models import Contact, Order, OrderItem, Product, ProductInfo, User
+from .models import STATE_CHOICES, Contact, Order, OrderItem, Product, ProductInfo, User
 
 
 # 1. Сериализаторы пользователей ----
@@ -102,6 +102,36 @@ class OrderItemSerializer(serializers.ModelSerializer):
         }
 
 
+class OrderDetailSerializer(serializers.ModelSerializer):
+    contact = serializers.PrimaryKeyRelatedField(read_only=True)
+    items = OrderItemSerializer(
+        source="orderitem_set",
+        many=True,
+        read_only=True,
+        help_text="Позиции заказа.",
+    )
+    total_sum = serializers.SerializerMethodField(
+        help_text="Итоговая сумма заказа: сумма quantity * price по всем позициям."
+    )
+
+    class Meta:
+        model = Order
+        fields = ("id", "user", "dt", "state", "contact", "total_sum", "items")
+        extra_kwargs = {
+            "id": {"read_only": True, "help_text": "ID заказа."},
+            "user": {"read_only": True, "help_text": "ID владельца заказа."},
+            "dt": {"read_only": True, "help_text": "Дата и время создания заказа."},
+            "state": {"help_text": "Текущий статус заказа."},
+        }
+
+    @extend_schema_field(OpenApiTypes.INT)
+    def get_total_sum(self, obj: Order) -> int:
+        total = 0
+        for item in OrderItem.objects.filter(order=obj).select_related("product_info"):
+            total += item.quantity * item.product_info.price
+        return total
+
+
 # 4. Сериализаторы контактов ----
 class ContactSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(read_only=True, help_text="ID адреса доставки.")
@@ -144,7 +174,8 @@ class AddToBasketSerializer(serializers.Serializer):
 class DeleteBasketItemSerializer(serializers.Serializer):
     order_id = serializers.IntegerField(
         min_value=1,
-        help_text="ID заказа-корзины, из которого удаляется позиция.",
+        required=False,
+        help_text="Опциональный ID заказа-корзины для дополнительной проверки.",
     )
     item_id = serializers.IntegerField(
         min_value=1,
@@ -193,10 +224,8 @@ class OrderHistorySerializer(serializers.ModelSerializer):
 
 class OrderUpdateSerializer(serializers.ModelSerializer):
     state = serializers.ChoiceField(
-        choices=[
-            "new",
-        ],
-        help_text="Новый статус заказа. Сейчас через API разрешен только переход в new.",
+        choices=[state for state, _ in STATE_CHOICES if state != "basket"],
+        help_text="Новый статус заказа. Статус basket нельзя выставить через этот endpoint.",
     )
 
     class Meta:

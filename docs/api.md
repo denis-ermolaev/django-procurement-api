@@ -245,31 +245,29 @@ Authorization: Bearer <access-token>
 
 ```json
 [
-  [
-    {
-      "id": 1,
-      "quantity": 2,
-      "order": 1,
-      "product_info": 1
-    }
-  ]
+  {
+    "id": 1,
+    "quantity": 2,
+    "order": 1,
+    "product_info": 1
+  }
 ]
 ```
 
-Формат ответа - массив заказов-корзин, где каждый заказ представлен массивом позиций. В текущем бизнес-сценарии обычно есть одна открытая корзина.
+Формат ответа - массив позиций текущей корзины. Текущая корзина определяется как первый заказ пользователя в статусе `basket`; новые позиции также добавляются именно в нее.
 
 ## 4.4. Удаление позиции ----
 
 ```http
-DELETE /api/basket/?order_id=1&item_id=1
+DELETE /api/basket/?item_id=1
 Authorization: Bearer <access-token>
 ```
 
 Успешный ответ `204 No Content` приходит без тела.
 
-Параметр `product_info_id` временно поддерживается как устаревший alias для `item_id`. Для новых клиентов используйте `item_id`, потому что удаляется именно позиция `OrderItem`, а не предложение `ProductInfo`.
+Для новых клиентов используйте `item_id`, потому что удаляется именно позиция `OrderItem`, а не предложение `ProductInfo`. Опционально можно передать `order_id` для дополнительной проверки, что позиция находится в конкретной корзине. Параметр `product_info_id` временно поддерживается как устаревший alias для `item_id`.
 
-Если не передать `item_id`, API возвращает `400 Bad Request`:
+Если не передать идентификатор позиции, API возвращает `400 Bad Request`:
 
 ```json
 {
@@ -444,11 +442,21 @@ Authorization: Bearer <access-token>
   "id": 1,
   "user": 2,
   "dt": "2026-06-21T16:40:31.083167Z",
-  "state": "confirmed"
+  "state": "confirmed",
+  "contact": 1,
+  "total_sum": 220000,
+  "items": [
+    {
+      "id": 1,
+      "quantity": 2,
+      "order": 1,
+      "product_info": 1
+    }
+  ]
 }
 ```
 
-Endpoint возвращает заказ только владельцу. Чужой или несуществующий заказ возвращает `404 Not Found`.
+Endpoint возвращает заказ только владельцу, включая позиции заказа и итоговую сумму. Чужой или несуществующий заказ возвращает `404 Not Found`.
 
 ## 6.4. Частичное обновление заказа ----
 
@@ -460,7 +468,7 @@ Content-Type: application/json
 
 ```json
 {
-  "state": "new"
+  "state": "delivered"
 }
 ```
 
@@ -471,16 +479,26 @@ Content-Type: application/json
   "id": 1,
   "user": 2,
   "dt": "2026-06-21T16:40:31.083167Z",
-  "state": "new"
+  "state": "delivered",
+  "contact": 1,
+  "total_sum": 220000,
+  "items": [
+    {
+      "id": 1,
+      "quantity": 2,
+      "order": 1,
+      "product_info": 1
+    }
+  ]
 }
 ```
 
-Текущая версия serializer-а разрешает только значение `state=new`. Например, `state=delivered` вернет `400 Bad Request`:
+Endpoint разрешает бизнес-статусы заказа, кроме `basket`: `new`, `confirmed`, `assembled`, `sent`, `delivered`, `canceled`. Например, неизвестный статус вернет `400 Bad Request`:
 
 ```json
 {
   "state": [
-    "\"delivered\" is not a valid choice."
+    "\"archived\" is not a valid choice."
   ]
 }
 ```

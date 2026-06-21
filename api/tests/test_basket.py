@@ -99,7 +99,37 @@ class BasketAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0][0]["id"], own_item.pk)
+        self.assertEqual(response.data[0]["id"], own_item.pk)
+
+    def test_get_basket_returns_current_basket_only(self) -> None:
+        current_order = Order.objects.create(user=self.user, state="basket")
+        current_item = OrderItem.objects.create(
+            order=current_order, product_info=self.product_info, quantity=2
+        )
+        stale_order = Order.objects.create(user=self.user, state="basket")
+        OrderItem.objects.create(
+            order=stale_order, product_info=self.other_product_info, quantity=3
+        )
+        confirmed_order = Order.objects.create(user=self.user, state="confirmed")
+        OrderItem.objects.create(
+            order=confirmed_order, product_info=self.product_info, quantity=1
+        )
+        self.authenticate()
+
+        response = self.api_client.get(reverse("basket"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data,
+            [
+                {
+                    "id": current_item.pk,
+                    "order": current_order.pk,
+                    "product_info": self.product_info.pk,
+                    "quantity": 2,
+                }
+            ],
+        )
 
     def test_delete_item_checks_order_ownership(self) -> None:
         own_order = Order.objects.create(user=self.user, state="basket")
@@ -113,14 +143,16 @@ class BasketAPITests(APITestCase):
         self.authenticate()
 
         forbidden_response = self.api_client.delete(
-            f"{reverse('basket')}?order_id={other_order.pk}&item_id={other_item.pk}"
+            f"{reverse('basket')}?item_id={other_item.pk}"
         )
-        response = self.api_client.delete(
-            f"{reverse('basket')}?order_id={own_order.pk}&item_id={own_item.pk}"
+        response = self.api_client.delete(f"{reverse('basket')}?item_id={own_item.pk}")
+        missing_response = self.api_client.delete(
+            f"{reverse('basket')}?order_id={own_order.pk}&item_id={other_item.pk}"
         )
 
         self.assertEqual(forbidden_response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(missing_response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertFalse(OrderItem.objects.filter(id=own_item.pk).exists())
 
     def test_delete_item_rejects_non_basket_order(self) -> None:
@@ -130,18 +162,15 @@ class BasketAPITests(APITestCase):
         )
         self.authenticate()
 
-        response = self.api_client.delete(
-            f"{reverse('basket')}?order_id={order.pk}&item_id={item.pk}"
-        )
+        response = self.api_client.delete(f"{reverse('basket')}?item_id={item.pk}")
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertTrue(OrderItem.objects.filter(id=item.pk).exists())
 
     def test_delete_item_requires_item_identifier(self) -> None:
-        order = Order.objects.create(user=self.user, state="basket")
         self.authenticate()
 
-        response = self.api_client.delete(f"{reverse('basket')}?order_id={order.pk}")
+        response = self.api_client.delete(reverse("basket"))
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("item_id", response.data)

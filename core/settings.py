@@ -202,7 +202,14 @@ SPECTACULAR_SETTINGS = {
     ],
     "ENUM_NAME_OVERRIDES": {
         "OrderStateEnum": "api.models.STATE_CHOICES",
-        "OrderUpdateStateEnum": ["new"],
+        "OrderUpdateStateEnum": [
+            "new",
+            "confirmed",
+            "assembled",
+            "sent",
+            "delivered",
+            "canceled",
+        ],
         "UserTypeEnum": "api.models.USER_TYPE_CHOICES",
     },
 }
