@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 import os
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
@@ -76,6 +77,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "api.middleware.RequestLogMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -263,3 +265,73 @@ EMAIL_BACKEND: str = os.getenv(
 )
 
 ADMIN_EMAILS = env_list("DJANGO_ADMIN_EMAILS", "admin1@example.com,admin2@example.com")
+
+
+# 13. Logging ----
+LOG_LEVEL = os.getenv("DJANGO_LOG_LEVEL", "INFO").upper()
+LOG_LEVEL_CHOICES = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+if LOG_LEVEL not in LOG_LEVEL_CHOICES:
+    raise ImproperlyConfigured(
+        "DJANGO_LOG_LEVEL must be one of DEBUG, INFO, WARNING, ERROR or CRITICAL."
+    )
+
+DJANGO_LOG_SQL = env_bool("DJANGO_LOG_SQL", default=False)
+CONSOLE_LOG_LEVEL = "DEBUG" if DJANGO_LOG_SQL else LOG_LEVEL
+
+LOGGING: dict[str, Any] = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": (
+                "%(asctime)s %(levelname)s %(name)s %(module)s:%(lineno)d %(message)s"
+            )
+        },
+        "simple": {
+            "format": "%(levelname)s %(name)s %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+            "level": CONSOLE_LOG_LEVEL,
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": LOG_LEVEL,
+    },
+    "loggers": {
+        "api": {
+            "handlers": ["console"],
+            "level": LOG_LEVEL,
+            "propagate": False,
+        },
+        "api.request": {
+            "handlers": ["console"],
+            "level": LOG_LEVEL,
+            "propagate": False,
+        },
+        "django": {
+            "handlers": ["console"],
+            "level": LOG_LEVEL,
+            "propagate": False,
+        },
+        "django.request": {
+            "handlers": ["console"],
+            "level": "ERROR",
+            "propagate": False,
+        },
+        "django.server": {
+            "handlers": ["console"],
+            "level": LOG_LEVEL,
+            "propagate": False,
+        },
+        "django.db.backends": {
+            "handlers": ["console"],
+            "level": "DEBUG" if DJANGO_LOG_SQL else "WARNING",
+            "propagate": False,
+        },
+    },
+}

@@ -68,6 +68,19 @@ Swagger UI доступен без JWT, но защищенные API-метод
 - `DJANGO_DEFAULT_FROM_EMAIL` - отправитель сервисных писем.
 - `DJANGO_ADMIN_EMAILS` - список email администраторов через запятую.
 
+## 3.3. Логгинг ----
+
+- `DJANGO_LOG_LEVEL` - общий уровень логирования: `DEBUG`, `INFO`, `WARNING`, `ERROR` или `CRITICAL`.
+- `DJANGO_LOG_SQL` - включает SQL-логи Django при значении `True`; по умолчанию выключено.
+
+Для разработки удобно ставить `DJANGO_LOG_LEVEL=DEBUG`: кроме итогов HTTP-запросов будут видны бизнес-события внутри функций каталога, корзины, заказов, загрузки прайсов и отправки email.
+
+В Docker логи Django доступны через:
+
+```bash
+docker compose logs -f web
+```
+
 # 4. Работа с API ----
 
 ## 4.1. Регистрация и JWT ----

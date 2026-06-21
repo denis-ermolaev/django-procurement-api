@@ -1,3 +1,5 @@
+import logging
+
 from django.shortcuts import get_object_or_404
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import (
@@ -35,6 +37,8 @@ from .serializers import (
     ProductInfoSerializer,
     ProductSerializer,
 )
+
+logger = logging.getLogger(__name__)
 
 # 1. Общие схемы OpenAPI ----
 AUTH_REQUIRED_RESPONSE = OpenApiResponse(
@@ -195,9 +199,18 @@ class ProductListView(APIView):
     )
     ## 2.1. Список продуктов ----
     def get(self, request: Request):
+        logger.debug(
+            "product_list_started user_id=%s filter_keys=%s",
+            request.user.pk,
+            sorted(request.query_params.keys()),
+        )
         queryset = Product.objects.order_by("id")
         parameter = request.query_params.get("parameter")
         if parameter and ":" not in parameter:
+            logger.warning(
+                "product_list_invalid_parameter_filter user_id=%s",
+                request.user.pk,
+            )
             return Response(
                 {"parameter": ["Ожидаемый формат: имя_параметра:значение."]},
                 status=400,
@@ -205,11 +218,22 @@ class ProductListView(APIView):
 
         filter_set = ProductFilter(request.query_params, queryset=queryset)
         if not filter_set.is_valid():
+            logger.warning(
+                "product_list_invalid_filters user_id=%s errors=%s",
+                request.user.pk,
+                filter_set.errors,
+            )
             return Response(filter_set.errors, status=400)
         queryset = filter_set.qs
 
         paginator = self.Pagination()
         page = paginator.paginate_queryset(queryset, request)
+        logger.debug(
+            "product_list_completed user_id=%s total_count=%s page_size=%s",
+            request.user.pk,
+            paginator.page.paginator.count,
+            len(page),
+        )
         serializer = self.serializer_class(page, many=True)
         return paginator.get_paginated_response(serializer.data)
 
@@ -265,6 +289,12 @@ class ProductDetailView(APIView):
     ## 2.2. Получить предложение ----
     def get(self, _, pk):
         product_info = get_object_or_404(ProductInfo, pk=pk)
+        logger.debug(
+            "product_detail_loaded product_info_id=%s product_id=%s shop_id=%s",
+            product_info.pk,
+            product_info.product.pk,
+            product_info.shop.pk,
+        )
         serializer = ProductInfoSerializer(product_info)
         return Response(serializer.data)
 
@@ -288,6 +318,18 @@ class BasketView(APIView):
         )
         if order is None and create:
             order = Order.objects.create(user=request.user, state="basket")
+            logger.info(
+                "basket_created user_id=%s order_id=%s",
+                request.user.pk,
+                order.pk,
+            )
+        else:
+            logger.debug(
+                "basket_selected user_id=%s order_id=%s create=%s",
+                request.user.pk,
+                order.pk if order else None,
+                create,
+            )
         return order
 
     @extend_schema(
@@ -330,10 +372,20 @@ class BasketView(APIView):
     def get(self, request: Request):
         order = self.get_current_basket(request)
         if order is None:
+            logger.debug(
+                "basket_list_empty user_id=%s reason=no_open_basket", request.user.pk
+            )
             return Response(data=[], status=200)
 
+        items = OrderItem.objects.filter(order=order).order_by("id")
+        logger.debug(
+            "basket_list_loaded user_id=%s order_id=%s item_count=%s",
+            request.user.pk,
+            order.pk,
+            items.count(),
+        )
         result = OrderItemSerializer(
-            OrderItem.objects.filter(order=order).order_by("id"),
+            items,
             many=True,
         ).data
         return Response(
@@ -393,6 +445,12 @@ class BasketView(APIView):
 
         product_info_id = serializer.validated_data["product_info_id"]
         quantity = serializer.validated_data["quantity"]
+        logger.debug(
+            "basket_add_started user_id=%s product_info_id=%s quantity=%s",
+            request.user.pk,
+            product_info_id,
+            quantity,
+        )
 
         product_info = get_object_or_404(ProductInfo, id=product_info_id)
         order = self.get_current_basket(request)
@@ -408,6 +466,17 @@ class BasketView(APIView):
         # 3.2. Сравниваем итоговое количество с остатком до создания/обновления
         # позиции, чтобы повторное добавление не могло превысить складской остаток.
         if current_quantity + quantity > product_info.quantity:
+            logger.warning(
+                (
+                    "basket_add_rejected_stock user_id=%s product_info_id=%s "
+                    "requested_quantity=%s current_quantity=%s available_quantity=%s"
+                ),
+                request.user.pk,
+                product_info.pk,
+                quantity,
+                current_quantity,
+                product_info.quantity,
+            )
             raise ValidationError(
                 {
                     "quantity": (
@@ -430,6 +499,19 @@ class BasketView(APIView):
         if not created:
             order_item.quantity += quantity
             order_item.save()
+
+        logger.info(
+            (
+                "basket_item_%s user_id=%s order_id=%s item_id=%s "
+                "product_info_id=%s quantity=%s"
+            ),
+            "created" if created else "updated",
+            request.user.pk,
+            order.pk,
+            order_item.pk,
+            product_info.pk,
+            order_item.quantity,
+        )
 
         serializer = OrderItemSerializer(order_item)
 
@@ -501,7 +583,20 @@ class BasketView(APIView):
             item_filters["order_id"] = order_id
 
         order_item = get_object_or_404(OrderItem, **item_filters)
+        deleted_item_id = order_item.pk
+        deleted_order_id = order_item.order.pk
+        deleted_product_info_id = order_item.product_info.pk
         order_item.delete()
+        logger.info(
+            (
+                "basket_item_deleted user_id=%s order_id=%s item_id=%s "
+                "product_info_id=%s"
+            ),
+            request.user.pk,
+            deleted_order_id,
+            deleted_item_id,
+            deleted_product_info_id,
+        )
 
         return Response(status=204)
 
@@ -553,6 +648,11 @@ class ContactView(APIView):
     ## 4.1. Получить адреса доставки ----
     def get(self, request: Request):
         items = Contact.objects.filter(user=request.user).order_by("id")
+        logger.debug(
+            "contact_list_loaded user_id=%s contact_count=%s",
+            request.user.pk,
+            items.count(),
+        )
         serializer = self.serializer_class(items, many=True)
 
         return Response(
@@ -620,6 +720,11 @@ class ContactView(APIView):
 
         new_contact = Contact(user=request.user, **serializer.validated_data)
         new_contact.save()
+        logger.info(
+            "contact_created user_id=%s contact_id=%s",
+            request.user.pk,
+            new_contact.pk,
+        )
 
         serializer = self.serializer_class(new_contact)
         return Response(
@@ -654,7 +759,13 @@ class ContactView(APIView):
         contact_id = request.GET.get("id")
 
         contact = get_object_or_404(Contact, id=contact_id, user=request.user)
+        deleted_contact_id = contact.pk
         contact.delete()
+        logger.info(
+            "contact_deleted user_id=%s contact_id=%s",
+            request.user.pk,
+            deleted_contact_id,
+        )
 
         return Response(status=204)
 
@@ -713,9 +824,20 @@ class OrderConfirmView(APIView):
 
         order_id = serializer.validated_data["order_id"]
         contact_id = serializer.validated_data["contact_id"]
+        logger.debug(
+            "order_confirm_started user_id=%s order_id=%s contact_id=%s",
+            request.user.pk,
+            order_id,
+            contact_id,
+        )
 
         order = get_object_or_404(Order, id=order_id, user=request.user, state="basket")
         if not OrderItem.objects.filter(order=order).exists():
+            logger.warning(
+                "order_confirm_rejected_empty_basket user_id=%s order_id=%s",
+                request.user.pk,
+                order.pk,
+            )
             raise ValidationError(
                 {"order_id": "Нельзя подтвердить заказ без позиций в корзине."}
             )
@@ -725,6 +847,12 @@ class OrderConfirmView(APIView):
         order.state = "confirmed"
         order.contact = contact
         order.save()
+        logger.info(
+            "order_confirmed user_id=%s order_id=%s contact_id=%s",
+            request.user.pk,
+            order.pk,
+            contact.pk,
+        )
 
         send_order_confirmation(order)
 
@@ -811,6 +939,11 @@ class OrderListView(APIView):
             .exclude(state="basket")
             .order_by("id")
         )
+        logger.debug(
+            "order_history_loaded user_id=%s order_count=%s",
+            request.user.pk,
+            orders.count(),
+        )
         queryset = pagination.paginate_queryset(queryset=orders, request=request)
         serializer = OrderHistorySerializer(queryset, many=True)
         return pagination.get_paginated_response(serializer.data)
@@ -870,6 +1003,12 @@ class OrderDetailView(APIView):
     ## 7.1. Получить заказ ----
     def get(self, request: Request, pk):
         order = get_object_or_404(Order, pk=pk, user=request.user)
+        logger.debug(
+            "order_detail_loaded user_id=%s order_id=%s state=%s",
+            request.user.pk,
+            order.pk,
+            order.state,
+        )
         serializer = self.serializer_class(order)
         return Response(serializer.data)
 
@@ -933,9 +1072,17 @@ class OrderDetailView(APIView):
     ## 7.2. Обновить заказ ----
     def patch(self, request, pk):
         order = get_object_or_404(Order, pk=pk, user=request.user)
+        old_state = order.state
         serializer = OrderUpdateSerializer(order, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        logger.info(
+            "order_state_updated user_id=%s order_id=%s old_state=%s new_state=%s",
+            request.user.pk,
+            order.pk,
+            old_state,
+            order.state,
+        )
         return Response(self.serializer_class(order).data, status=200)
 
 
