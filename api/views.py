@@ -1,5 +1,11 @@
 from django.shortcuts import get_list_or_404, get_object_or_404
-from drf_spectacular.utils import OpenApiParameter, extend_schema
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import (
+    OpenApiExample,
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+)
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -11,15 +17,42 @@ from .filters import ProductFilter
 from .models import Contact, Order, OrderItem, Product, ProductInfo
 from .serializers import (
     AddToBasketSerializer,
+    BasketItemResponseSerializer,
+    ContactListResponseSerializer,
+    ContactResponseSerializer,
     ContactSerializer,
+    ErrorDetailSerializer,
+    OrderConfirmResponseSerializer,
     OrderConfirmSerializer,
     OrderHistorySerializer,
     OrderItemSerializer,
     OrderSerializer,
     OrderUpdateSerializer,
+    PaginatedOrderHistoryResponseSerializer,
+    PaginatedProductResponseSerializer,
     ProductInfoSerializer,
     ProductSerializer,
 )
+
+AUTH_REQUIRED_RESPONSE = OpenApiResponse(
+    response=ErrorDetailSerializer,
+    description="JWT access token не передан, просрочен или некорректен.",
+)
+NOT_FOUND_RESPONSE = OpenApiResponse(
+    response=ErrorDetailSerializer,
+    description="Запрошенный объект не найден или не принадлежит текущему пользователю.",
+)
+VALIDATION_ERROR_RESPONSE = OpenApiResponse(
+    response=OpenApiTypes.OBJECT,
+    description="Ошибка валидации. Ответ содержит поля запроса и список ошибок по каждому полю.",
+)
+BASKET_LIST_RESPONSE_SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "array",
+        "items": {"$ref": "#/components/schemas/OrderItem"},
+    },
+}
 
 
 class ProductListView(APIView):
@@ -35,57 +68,91 @@ class ProductListView(APIView):
         max_page_size = 100
 
     @extend_schema(
+        operation_id="product_list",
+        summary="Список товаров",
+        description=(
+            "Возвращает постраничный каталог товаров. Фильтры по цене, магазину и "
+            "характеристикам применяются к связанным предложениям ProductInfo, но "
+            "в ответе возвращаются сами товары Product."
+        ),
+        tags=["Products"],
         parameters=[
             OpenApiParameter(
                 name="page",
-                type=int,
+                type=OpenApiTypes.INT,
                 location=OpenApiParameter.QUERY,
-                description="Номер страницы",
+                description="Номер страницы. Нумерация начинается с 1.",
             ),
             OpenApiParameter(
                 name="page_size",
-                type=int,
+                type=OpenApiTypes.INT,
                 location=OpenApiParameter.QUERY,
-                description="От 5 до 100, кол-во данных на страницу",
+                description="Количество товаров на страницу. Допустимый диапазон: 1-100.",
             ),
             # Добавляем параметры фильтрации
             OpenApiParameter(
                 name="search",
-                type=str,
+                type=OpenApiTypes.STR,
                 location=OpenApiParameter.QUERY,
                 description="Поиск по названию товара (регистронезависимый)",
             ),
             OpenApiParameter(
                 name="category_id",
-                type=int,
+                type=OpenApiTypes.INT,
                 location=OpenApiParameter.QUERY,
                 description="ID категории",
             ),
             OpenApiParameter(
                 name="shop_id",
-                type=int,
+                type=OpenApiTypes.INT,
                 location=OpenApiParameter.QUERY,
                 description="ID магазина, в котором должен быть товар в наличии",
             ),
             OpenApiParameter(
                 name="price_min",
-                type=int,
+                type=OpenApiTypes.INT,
                 location=OpenApiParameter.QUERY,
                 description="Минимальная цена товара (в любом магазине)",
             ),
             OpenApiParameter(
                 name="price_max",
-                type=int,
+                type=OpenApiTypes.INT,
                 location=OpenApiParameter.QUERY,
                 description="Максимальная цена товара (в любом магазине)",
             ),
             OpenApiParameter(
                 name="parameter",
-                type=str,
+                type=OpenApiTypes.STR,
                 location=OpenApiParameter.QUERY,
                 description="Фильтр по параметру в формате 'имя_параметра:значение', например: 'цвет:красный'",
+                examples=[
+                    OpenApiExample(
+                        "Фильтр по характеристике",
+                        value="color:black",
+                    )
+                ],
             ),
-        ]
+        ],
+        responses={
+            200: OpenApiResponse(
+                response=PaginatedProductResponseSerializer,
+                description="Постраничный список товаров.",
+                examples=[
+                    OpenApiExample(
+                        "Одна страница каталога",
+                        value={
+                            "count": 2,
+                            "next": "http://testserver/api/products/?page=2&page_size=1",
+                            "previous": None,
+                            "results": [{"id": 1, "category": 1, "name": "Test Phone"}],
+                        },
+                        response_only=True,
+                    )
+                ],
+            ),
+            400: VALIDATION_ERROR_RESPONSE,
+            401: AUTH_REQUIRED_RESPONSE,
+        },
     )
     # 1. Список продуктов ----
     def get(self, request: Request):
@@ -106,6 +173,28 @@ class ProductListView(APIView):
 
 # 2. Детальная информация о продукте ----
 class ProductDetailView(APIView):
+    serializer_class = ProductInfoSerializer
+
+    @extend_schema(
+        operation_id="product_offer_retrieve",
+        summary="Детальная информация о предложении",
+        description=(
+            "Возвращает конкретное предложение товара ProductInfo: товар, магазин, "
+            "название предложения, остаток, цену и рекомендованную цену."
+        ),
+        tags=["Products"],
+        responses={
+            200: OpenApiResponse(
+                response=ProductInfoSerializer,
+                description="Данные предложения товара.",
+            ),
+            401: AUTH_REQUIRED_RESPONSE,
+            404: OpenApiResponse(
+                response=ErrorDetailSerializer,
+                description="Предложение с указанным id не найдено.",
+            ),
+        },
+    )
     def get(self, _, pk):
         product_info = get_object_or_404(ProductInfo, pk=pk)
         serializer = ProductInfoSerializer(product_info)
@@ -118,22 +207,45 @@ class BasketView(APIView):
     Взаимодействие с корзиной
     """
 
-    # serializer_class = CapsulesSerializer
+    serializer_class = OrderItemSerializer
+
     @extend_schema(
+        operation_id="basket_retrieve",
+        summary="Получить корзину",
+        description=(
+            "Возвращает все заказы текущего пользователя в статусе basket. "
+            "Фактический формат ответа: массив заказов, где каждый заказ представлен "
+            "массивом позиций OrderItem. Если корзина пуста, возвращается пустой массив."
+        ),
+        tags=["Basket"],
         responses={
-            200: {
-                "example": [
-                    [
-                        {"order": 1, "product": 1, "shop": 1, "quantity": 14},
-                        {"order": 1, "product": 2, "shop": 1, "quantity": 9},
-                    ],
-                    [
-                        {"order": 2, "product": 1, "shop": 1, "quantity": 14},
-                        {"order": 2, "product": 2, "shop": 1, "quantity": 9},
-                    ],
+            200: OpenApiResponse(
+                response=BASKET_LIST_RESPONSE_SCHEMA,
+                description="Список корзин и их позиций.",
+                examples=[
+                    OpenApiExample(
+                        "Корзина с одной позицией",
+                        value=[
+                            [
+                                {
+                                    "id": 7,
+                                    "order": 3,
+                                    "product_info": 15,
+                                    "quantity": 2,
+                                }
+                            ]
+                        ],
+                        response_only=True,
+                    ),
+                    OpenApiExample(
+                        "Пустая корзина",
+                        value=[],
+                        response_only=True,
+                    ),
                 ],
-            }
-        }
+            ),
+            401: AUTH_REQUIRED_RESPONSE,
+        },
     )
     ## 3.1. Получить корзину ----
     def get(self, request: Request):
@@ -157,7 +269,41 @@ class BasketView(APIView):
         )
 
     @extend_schema(
+        operation_id="basket_add_item",
+        summary="Добавить товар в корзину",
+        description=(
+            "Добавляет предложение ProductInfo в корзину текущего пользователя. "
+            "Если открытой корзины нет, она создается автоматически. Если такая "
+            "позиция уже есть в корзине, quantity увеличивается на переданное значение."
+        ),
+        tags=["Basket"],
         request=AddToBasketSerializer,
+        responses={
+            200: OpenApiResponse(
+                response=BasketItemResponseSerializer,
+                description="Созданная или обновленная позиция корзины.",
+                examples=[
+                    OpenApiExample(
+                        "Позиция корзины",
+                        value={
+                            "data": {
+                                "id": 7,
+                                "order": 3,
+                                "product_info": 15,
+                                "quantity": 2,
+                            }
+                        },
+                        response_only=True,
+                    )
+                ],
+            ),
+            400: VALIDATION_ERROR_RESPONSE,
+            401: AUTH_REQUIRED_RESPONSE,
+            404: OpenApiResponse(
+                response=ErrorDetailSerializer,
+                description="Предложение товара product_info_id не найдено.",
+            ),
+        },
     )
     ## 3.2. Добавить товар в корзину ----
     def post(self, request: Request):
@@ -197,22 +343,35 @@ class BasketView(APIView):
         )
 
     @extend_schema(
+        operation_id="basket_delete_item",
+        summary="Удалить позицию из корзины",
+        description=(
+            "Удаляет позицию OrderItem из корзины текущего пользователя. "
+            "Текущий контракт сохраняет имя query-параметра product_info_id, "
+            "но ожидает в нем id позиции корзины OrderItem."
+        ),
+        tags=["Basket"],
         parameters=[
             OpenApiParameter(
                 name="product_info_id",
-                type=int,
+                type=OpenApiTypes.INT,
                 required=True,
                 location=OpenApiParameter.QUERY,
-                description="id продукта для удаления из корзины",
+                description="ID позиции корзины OrderItem, которую нужно удалить.",
             ),
             OpenApiParameter(
                 name="order_id",
-                type=int,
+                type=OpenApiTypes.INT,
                 required=True,
                 location=OpenApiParameter.QUERY,
-                description="id заказа, из которого удаляем",
+                description="ID заказа-корзины, из которого удаляется позиция.",
             ),
         ],
+        responses={
+            204: OpenApiResponse(description="Позиция удалена, тело ответа пустое."),
+            401: AUTH_REQUIRED_RESPONSE,
+            404: NOT_FOUND_RESPONSE,
+        },
     )
     ## 3.3. Удалить товар из корзины ----
     def delete(self, request: Request):
@@ -235,6 +394,46 @@ class ContactView(APIView):
 
     serializer_class = ContactSerializer
 
+    @extend_schema(
+        operation_id="contact_list",
+        summary="Список адресов доставки",
+        description=(
+            "Возвращает адреса доставки текущего пользователя в обертке data. "
+            "Если у пользователя нет сохраненных адресов, текущая реализация возвращает 404."
+        ),
+        tags=["Contacts"],
+        responses={
+            200: OpenApiResponse(
+                response=ContactListResponseSerializer,
+                description="Список адресов доставки текущего пользователя.",
+                examples=[
+                    OpenApiExample(
+                        "Адреса доставки",
+                        value={
+                            "data": [
+                                {
+                                    "id": 1,
+                                    "city": "Kaliningrad",
+                                    "street": "Lenina",
+                                    "house": "1",
+                                    "structure": "",
+                                    "building": "",
+                                    "apartment": "10",
+                                    "phone": "+70000000000",
+                                }
+                            ]
+                        },
+                        response_only=True,
+                    )
+                ],
+            ),
+            401: AUTH_REQUIRED_RESPONSE,
+            404: OpenApiResponse(
+                response=ErrorDetailSerializer,
+                description="У текущего пользователя нет сохраненных адресов доставки.",
+            ),
+        },
+    )
     def get(self, request: Request):
         query = Contact.objects.filter(user=request.user)
 
@@ -249,6 +448,24 @@ class ContactView(APIView):
             status=200,
         )
 
+    @extend_schema(
+        operation_id="contact_create",
+        summary="Создать адрес доставки",
+        description=(
+            "Создает адрес доставки для текущего пользователя. Поля city, street и phone "
+            "обязательны; house, structure, building и apartment могут быть пустыми строками."
+        ),
+        tags=["Contacts"],
+        request=ContactSerializer,
+        responses={
+            200: OpenApiResponse(
+                response=ContactResponseSerializer,
+                description="Созданный адрес доставки в обертке data.",
+            ),
+            400: VALIDATION_ERROR_RESPONSE,
+            401: AUTH_REQUIRED_RESPONSE,
+        },
+    )
     def post(self, request: Request):
         serializer = self.serializer_class(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -265,15 +482,24 @@ class ContactView(APIView):
         )
 
     @extend_schema(
+        operation_id="contact_delete",
+        summary="Удалить адрес доставки",
+        description="Удаляет адрес доставки текущего пользователя по query-параметру id.",
+        tags=["Contacts"],
         parameters=[
             OpenApiParameter(
                 name="id",
-                type=int,
+                type=OpenApiTypes.INT,
                 required=True,
                 location=OpenApiParameter.QUERY,
-                description="id информации доставки для удаления",
+                description="ID адреса доставки.",
             ),
         ],
+        responses={
+            204: OpenApiResponse(description="Адрес удален, тело ответа пустое."),
+            401: AUTH_REQUIRED_RESPONSE,
+            404: NOT_FOUND_RESPONSE,
+        },
     )
     def delete(self, request: Request):
         id = request.GET.get("id")
@@ -291,11 +517,36 @@ class OrderConfirmView(APIView):
     """
 
     @extend_schema(
+        operation_id="order_confirm",
+        summary="Подтвердить заказ",
+        description=(
+            "Переводит заказ текущего пользователя из статуса basket в confirmed, "
+            "привязывает выбранный адрес доставки и отправляет e-mail уведомления. "
+            "И заказ, и адрес должны принадлежать текущему пользователю."
+        ),
+        tags=["Orders"],
         request=OrderConfirmSerializer,
         responses={
-            200: {"description": "Заказ подтверждён"},
-            400: {"description": "Ошибка валидации"},
-            404: {"description": "Заказ или контакт не найден"},
+            200: OpenApiResponse(
+                response=OrderConfirmResponseSerializer,
+                description="Заказ подтвержден.",
+                examples=[
+                    OpenApiExample(
+                        "Заказ подтвержден",
+                        value={"status": "Order confirmed"},
+                        response_only=True,
+                    )
+                ],
+            ),
+            400: VALIDATION_ERROR_RESPONSE,
+            401: AUTH_REQUIRED_RESPONSE,
+            404: OpenApiResponse(
+                response=ErrorDetailSerializer,
+                description=(
+                    "Заказ не найден, не принадлежит текущему пользователю, уже не в "
+                    "статусе basket, либо contact_id не найден у текущего пользователя."
+                ),
+            ),
         },
     )
     def post(self, request: Request):
@@ -333,9 +584,54 @@ class OrderListView(APIView):
         max_page_size = 100
 
     @extend_schema(
+        operation_id="order_history_list",
+        summary="История заказов",
+        description=(
+            "Возвращает постраничную историю заказов текущего пользователя. "
+            "Заказы в статусе basket не включаются. total_sum рассчитывается как "
+            "сумма quantity * price по позициям заказа."
+        ),
+        tags=["Orders"],
+        parameters=[
+            OpenApiParameter(
+                name="page",
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                description="Номер страницы. Нумерация начинается с 1.",
+            ),
+            OpenApiParameter(
+                name="page_size",
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                description="Количество заказов на страницу. Максимум: 100.",
+            ),
+        ],
         responses={
-            200: OrderHistorySerializer(many=True),
-        }
+            200: OpenApiResponse(
+                response=PaginatedOrderHistoryResponseSerializer,
+                description="Постраничный список заказов без корзин.",
+                examples=[
+                    OpenApiExample(
+                        "История заказов",
+                        value={
+                            "count": 1,
+                            "next": None,
+                            "previous": None,
+                            "results": [
+                                {
+                                    "id": 4,
+                                    "dt": "2026-06-21T12:00:00Z",
+                                    "total_sum": 300,
+                                    "state": "confirmed",
+                                }
+                            ],
+                        },
+                        response_only=True,
+                    )
+                ],
+            ),
+            401: AUTH_REQUIRED_RESPONSE,
+        },
     )
     def get(self, request: Request):
         pagination = self.Pagination()
@@ -351,17 +647,43 @@ class OrderListView(APIView):
 
 # 2. Детальная информация о продукте ----
 class OrderDetailView(APIView):
+    serializer_class = OrderSerializer
+
+    @extend_schema(
+        operation_id="order_retrieve",
+        summary="Детальная информация о заказе",
+        description="Возвращает заказ по id, если он принадлежит текущему пользователю.",
+        tags=["Orders"],
+        responses={
+            200: OpenApiResponse(
+                response=OrderSerializer, description="Данные заказа."
+            ),
+            401: AUTH_REQUIRED_RESPONSE,
+            404: NOT_FOUND_RESPONSE,
+        },
+    )
     def get(self, request: Request, pk):
         order = get_object_or_404(Order, pk=pk, user=request.user)
         serializer = OrderSerializer(order)
         return Response(serializer.data)
 
     @extend_schema(
+        operation_id="order_update",
+        summary="Обновить заказ",
+        description=(
+            "Частично обновляет заказ текущего пользователя. Текущая serializer-валидация "
+            "разрешает передать только state=new."
+        ),
+        tags=["Orders"],
         request=OrderUpdateSerializer,
         responses={
-            200: OrderSerializer,
-            400: {"description": "Ошибка валидации"},
-            404: {"description": "Заказ не найден"},
+            200: OpenApiResponse(
+                response=OrderSerializer,
+                description="Обновленный заказ.",
+            ),
+            400: VALIDATION_ERROR_RESPONSE,
+            401: AUTH_REQUIRED_RESPONSE,
+            404: NOT_FOUND_RESPONSE,
         },
     )
     def patch(self, request, pk):

@@ -150,15 +150,50 @@ REST_FRAMEWORK = {
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "Procurement API",
-    "DESCRIPTION": "API для управления закупками",
+    "DESCRIPTION": (
+        "API сервиса закупок. Основной сценарий: пользователь регистрируется через "
+        "Djoser, активирует аккаунт по uid/token из письма, получает JWT через "
+        "`/api/auth/jwt/create/`, передает access token в заголовке "
+        "`Authorization: Bearer <token>`, просматривает каталог, добавляет предложения "
+        "товаров в корзину, сохраняет адрес доставки и подтверждает заказ. Все "
+        "бизнес-эндпоинты `/api/products/`, `/api/basket/`, `/api/contact/` и "
+        "`/api/orders/` требуют JWT-аутентификацию."
+    ),
     "VERSION": "1.0.0",  # Версия API
     "SERVE_INCLUDE_SCHEMA": False,  # Скрывает саму схему OpenAPI из UI
+    "COMPONENT_SPLIT_REQUEST": True,
     "SWAGGER_UI_SETTINGS": {
         "persistAuthorization": True,  # не сбрасывать авторизацию
+        "displayOperationId": True,
+        "filter": True,
     },
-    "SECURITY": [
-        {"BearerAuth": []}
-    ],  # Эта настройка делает BearerAuth стандартом для всех эндпоинтов
+    "TAGS": [
+        {
+            "name": "Products",
+            "description": "Каталог товаров, предложения магазинов и фильтрация.",
+        },
+        {
+            "name": "Basket",
+            "description": "Корзина текущего пользователя: просмотр, добавление и удаление позиций.",
+        },
+        {
+            "name": "Contacts",
+            "description": "Адреса доставки текущего пользователя.",
+        },
+        {
+            "name": "Orders",
+            "description": "Подтверждение, история и обновление заказов.",
+        },
+        {
+            "name": "auth",
+            "description": "Регистрация, активация пользователей и JWT-токены Djoser.",
+        },
+    ],
+    "ENUM_NAME_OVERRIDES": {
+        "OrderStateEnum": "api.models.STATE_CHOICES",
+        "OrderUpdateStateEnum": ["new"],
+        "UserTypeEnum": "api.models.USER_TYPE_CHOICES",
+    },
 }
 
 
