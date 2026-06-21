@@ -40,19 +40,36 @@ from .serializers import (
 AUTH_REQUIRED_RESPONSE = OpenApiResponse(
     response=ErrorDetailSerializer,
     description="JWT access token не передан, просрочен или некорректен.",
+    examples=[
+        OpenApiExample(
+            "Нет JWT",
+            value={"detail": "Authentication credentials were not provided."},
+            response_only=True,
+        )
+    ],
 )
 NOT_FOUND_RESPONSE = OpenApiResponse(
     response=ErrorDetailSerializer,
     description="Запрошенный объект не найден или не принадлежит текущему пользователю.",
+    examples=[
+        OpenApiExample(
+            "Объект не найден",
+            value={"detail": "Not found."},
+            response_only=True,
+        )
+    ],
 )
 VALIDATION_ERROR_RESPONSE = OpenApiResponse(
     response=OpenApiTypes.OBJECT,
     description="Ошибка валидации. Ответ содержит поля запроса и список ошибок по каждому полю.",
+    examples=[
+        OpenApiExample(
+            "Ошибка поля",
+            value={"field": ["This field is required."]},
+            response_only=True,
+        )
+    ],
 )
-BASKET_RESPONSE_SCHEMA = {
-    "type": "array",
-    "items": {"$ref": "#/components/schemas/OrderItem"},
-}
 
 
 # 2. Каталог товаров ----
@@ -72,9 +89,11 @@ class ProductListView(APIView):
         operation_id="product_list",
         summary="Список товаров",
         description=(
-            "Возвращает постраничный каталог товаров. Фильтры по цене, магазину и "
-            "характеристикам применяются к связанным предложениям ProductInfo, но "
-            "в ответе возвращаются сами товары Product."
+            "Возвращает постраничный каталог сущностей Product. Product - это общий "
+            "товар в каталоге, а ProductInfo - конкретное предложение магазина с "
+            "ценой, остатком и характеристиками. Поэтому фильтры по цене, магазину "
+            "и характеристикам применяются через связанные ProductInfo, но в ответе "
+            "остаются сами товары Product."
         ),
         tags=["Products"],
         parameters=[
@@ -95,6 +114,12 @@ class ProductListView(APIView):
                 type=OpenApiTypes.STR,
                 location=OpenApiParameter.QUERY,
                 description="Поиск по названию товара (регистронезависимый)",
+                examples=[
+                    OpenApiExample(
+                        "Поиск смартфона",
+                        value="Xiaomi",
+                    )
+                ],
             ),
             OpenApiParameter(
                 name="category_id",
@@ -106,7 +131,7 @@ class ProductListView(APIView):
                 name="shop_id",
                 type=OpenApiTypes.INT,
                 location=OpenApiParameter.QUERY,
-                description="ID магазина, в котором должен быть товар в наличии",
+                description="ID магазина, у которого есть предложение ProductInfo для товара",
             ),
             OpenApiParameter(
                 name="price_min",
@@ -124,7 +149,10 @@ class ProductListView(APIView):
                 name="parameter",
                 type=OpenApiTypes.STR,
                 location=OpenApiParameter.QUERY,
-                description="Фильтр по параметру в формате 'имя_параметра:значение', например: 'цвет:красный'",
+                description=(
+                    "Фильтр по характеристике предложения в формате "
+                    "'имя_параметра:значение'. Значение ищется без учета регистра."
+                ),
                 examples=[
                     OpenApiExample(
                         "Фильтр по характеристике",
@@ -194,10 +222,19 @@ class ProductDetailView(APIView):
         operation_id="product_offer_retrieve",
         summary="Детальная информация о предложении",
         description=(
-            "Возвращает конкретное предложение товара ProductInfo: товар, магазин, "
-            "название предложения, остаток, цену и рекомендованную цену."
+            "Возвращает конкретное предложение ProductInfo. Это не общий товар Product, "
+            "а предложение конкретного магазина: ссылка на товар и магазин, название "
+            "из прайса, остаток, фактическая цена и рекомендованная цена."
         ),
         tags=["Products"],
+        parameters=[
+            OpenApiParameter(
+                name="id",
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.PATH,
+                description="ID предложения ProductInfo.",
+            ),
+        ],
         responses={
             200: OpenApiResponse(
                 response=ProductInfoSerializer,
@@ -241,6 +278,9 @@ class BasketView(APIView):
     serializer_class = OrderItemSerializer
 
     def get_current_basket(self, request: Request, *, create: bool = False):
+        # 3.1. Текущей считаем самую раннюю открытую корзину пользователя.
+        # Это сохраняет предсказуемое поведение даже если в БД остались старые
+        # дублирующие basket-заказы.
         order = (
             Order.objects.filter(user=request.user, state="basket")
             .order_by("id")
@@ -256,12 +296,12 @@ class BasketView(APIView):
         description=(
             "Возвращает позиции текущей корзины пользователя. Текущая корзина - первый "
             "заказ пользователя в статусе basket. Если корзины нет или она пуста, "
-            "возвращается пустой массив."
+            "возвращается пустой массив. Оформленные заказы в ответ не попадают."
         ),
         tags=["Basket"],
         responses={
             200: OpenApiResponse(
-                response=BASKET_RESPONSE_SCHEMA,
+                response=OrderItemSerializer(many=True),
                 description="Позиции текущей корзины.",
                 examples=[
                     OpenApiExample(
@@ -312,6 +352,13 @@ class BasketView(APIView):
         ),
         tags=["Basket"],
         request=AddToBasketSerializer,
+        examples=[
+            OpenApiExample(
+                "Добавить предложение",
+                value={"product_info_id": 1, "quantity": 2},
+                request_only=True,
+            ),
+        ],
         responses={
             200: OpenApiResponse(
                 response=BasketItemResponseSerializer,
@@ -358,6 +405,8 @@ class BasketView(APIView):
                 or 0
             )
 
+        # 3.2. Сравниваем итоговое количество с остатком до создания/обновления
+        # позиции, чтобы повторное добавление не могло превысить складской остаток.
         if current_quantity + quantity > product_info.quantity:
             raise ValidationError(
                 {
@@ -441,6 +490,8 @@ class BasketView(APIView):
             or serializer.validated_data["product_info_id"]
         )
 
+        # 3.3. Фильтруем через order__user и order__state, чтобы пользователь не мог
+        # удалить чужую позицию или позицию из уже оформленного заказа.
         item_filters = {
             "id": item_id,
             "order__user": request.user,
@@ -520,6 +571,21 @@ class ContactView(APIView):
         ),
         tags=["Contacts"],
         request=ContactSerializer,
+        examples=[
+            OpenApiExample(
+                "Адрес доставки",
+                value={
+                    "city": "Kaliningrad",
+                    "street": "Lenina",
+                    "house": "1",
+                    "structure": "",
+                    "building": "",
+                    "apartment": "10",
+                    "phone": "+70000000000",
+                },
+                request_only=True,
+            ),
+        ],
         responses={
             200: OpenApiResponse(
                 response=ContactResponseSerializer,
@@ -610,6 +676,13 @@ class OrderConfirmView(APIView):
         ),
         tags=["Orders"],
         request=OrderConfirmSerializer,
+        examples=[
+            OpenApiExample(
+                "Подтвердить корзину",
+                value={"order_id": 1, "contact_id": 1},
+                request_only=True,
+            ),
+        ],
         responses={
             200: OpenApiResponse(
                 response=OrderConfirmResponseSerializer,
@@ -675,7 +748,8 @@ class OrderListView(APIView):
         description=(
             "Возвращает постраничную историю заказов текущего пользователя. "
             "Заказы в статусе basket не включаются. total_sum рассчитывается как "
-            "сумма quantity * price по позициям заказа."
+            "сумма quantity * price по позициям заказа. Содержимое конкретного заказа "
+            "доступно через GET /api/orders/{id}/."
         ),
         tags=["Orders"],
         parameters=[
@@ -713,7 +787,17 @@ class OrderListView(APIView):
                             ],
                         },
                         response_only=True,
-                    )
+                    ),
+                    OpenApiExample(
+                        "Пустая история",
+                        value={
+                            "count": 0,
+                            "next": None,
+                            "previous": None,
+                            "results": [],
+                        },
+                        response_only=True,
+                    ),
                 ],
             ),
             401: AUTH_REQUIRED_RESPONSE,
@@ -739,8 +823,19 @@ class OrderDetailView(APIView):
     @extend_schema(
         operation_id="order_retrieve",
         summary="Детальная информация о заказе",
-        description="Возвращает заказ по id, если он принадлежит текущему пользователю.",
+        description=(
+            "Возвращает заказ по id, если он принадлежит текущему пользователю. "
+            "Ответ включает адрес доставки, итоговую сумму и позиции заказа."
+        ),
         tags=["Orders"],
+        parameters=[
+            OpenApiParameter(
+                name="id",
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.PATH,
+                description="ID заказа текущего пользователя.",
+            ),
+        ],
         responses={
             200: OpenApiResponse(
                 response=OrderDetailSerializer,
@@ -783,10 +878,26 @@ class OrderDetailView(APIView):
         summary="Обновить заказ",
         description=(
             "Частично обновляет статус заказа текущего пользователя. Разрешены "
-            "бизнес-статусы заказа, кроме basket."
+            "бизнес-статусы new, confirmed, assembled, sent, delivered и canceled. "
+            "Статус basket через этот endpoint не выставляется."
         ),
         tags=["Orders"],
         request=OrderUpdateSerializer,
+        parameters=[
+            OpenApiParameter(
+                name="id",
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.PATH,
+                description="ID заказа текущего пользователя.",
+            ),
+        ],
+        examples=[
+            OpenApiExample(
+                "Перевести в доставлен",
+                value={"state": "delivered"},
+                request_only=True,
+            ),
+        ],
         responses={
             200: OpenApiResponse(
                 response=OrderDetailSerializer,

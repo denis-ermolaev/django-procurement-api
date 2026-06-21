@@ -6,8 +6,13 @@ from rest_framework import serializers
 
 from .models import STATE_CHOICES, Contact, Order, OrderItem, Product, ProductInfo, User
 
+# 1. Константы сериализаторов ----
+ORDER_UPDATE_STATE_CHOICES = tuple(
+    (state, label) for state, label in STATE_CHOICES if state != "basket"
+)
 
-# 1. Сериализаторы пользователей ----
+
+# 2. Сериализаторы пользователей ----
 class UserCreateSerializer(BaseUserCreateSerializer):
     class Meta(BaseUserCreateSerializer.Meta):
         model = User
@@ -46,7 +51,7 @@ class UserSerializer(BaseUserSerializer):
         )
 
 
-# 2. Сериализаторы каталога ----
+# 3. Сериализаторы каталога ----
 class ProductSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
@@ -68,16 +73,18 @@ class ProductInfoSerializer(serializers.ModelSerializer):
         fields = "__all__"
         extra_kwargs = {
             "id": {"read_only": True, "help_text": "ID конкретного предложения."},
-            "product": {"help_text": "ID товара из каталога."},
-            "shop": {"help_text": "ID магазина, который продает товар."},
-            "name": {"help_text": "Название предложения у магазина."},
-            "quantity": {"help_text": "Количество товара в наличии."},
-            "price": {"help_text": "Цена предложения."},
+            "product": {"help_text": "ID товара Product из общего каталога."},
+            "shop": {"help_text": "ID магазина, который продает это предложение."},
+            "name": {"help_text": "Название предложения в прайсе магазина."},
+            "quantity": {
+                "help_text": "Доступный остаток. При добавлении в корзину quantity не может быть больше этого значения."
+            },
+            "price": {"help_text": "Фактическая цена предложения."},
             "price_rrc": {"help_text": "Рекомендованная розничная цена."},
         }
 
 
-# 3. Сериализаторы заказов ----
+# 4. Сериализаторы заказов ----
 class OrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
@@ -96,14 +103,20 @@ class OrderItemSerializer(serializers.ModelSerializer):
         fields = "__all__"
         extra_kwargs = {
             "id": {"read_only": True, "help_text": "ID позиции заказа."},
-            "order": {"help_text": "ID заказа."},
+            "order": {"help_text": "ID заказа, к которому относится позиция."},
             "product_info": {"help_text": "ID предложения товара."},
-            "quantity": {"help_text": "Количество единиц товара в позиции."},
+            "quantity": {
+                "help_text": "Количество единиц этого предложения внутри заказа."
+            },
         }
 
 
 class OrderDetailSerializer(serializers.ModelSerializer):
-    contact = serializers.PrimaryKeyRelatedField(read_only=True)
+    contact = serializers.PrimaryKeyRelatedField(
+        read_only=True,
+        allow_null=True,
+        help_text="ID адреса доставки. До подтверждения заказа может быть null.",
+    )
     items = OrderItemSerializer(
         source="orderitem_set",
         many=True,
@@ -132,7 +145,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
         return total
 
 
-# 4. Сериализаторы контактов ----
+# 5. Сериализаторы контактов ----
 class ContactSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(read_only=True, help_text="ID адреса доставки.")
 
@@ -159,7 +172,7 @@ class ContactSerializer(serializers.ModelSerializer):
         }
 
 
-# 5. Сериализаторы входных команд ----
+# 6. Сериализаторы входных команд ----
 class AddToBasketSerializer(serializers.Serializer):
     product_info_id = serializers.IntegerField(
         min_value=1,
@@ -185,7 +198,7 @@ class DeleteBasketItemSerializer(serializers.Serializer):
     product_info_id = serializers.IntegerField(
         min_value=1,
         required=False,
-        help_text="Устаревшее имя параметра. Временно принимается как item_id.",
+        help_text="Устаревшее имя параметра. Временно принимается как item_id для обратной совместимости.",
     )
 
     def validate(self, attrs):
@@ -224,8 +237,11 @@ class OrderHistorySerializer(serializers.ModelSerializer):
 
 class OrderUpdateSerializer(serializers.ModelSerializer):
     state = serializers.ChoiceField(
-        choices=[state for state, _ in STATE_CHOICES if state != "basket"],
-        help_text="Новый статус заказа. Статус basket нельзя выставить через этот endpoint.",
+        choices=ORDER_UPDATE_STATE_CHOICES,
+        help_text=(
+            "Новый статус заказа. Разрешены new, confirmed, assembled, sent, "
+            "delivered и canceled; статус basket нельзя выставить через этот endpoint."
+        ),
     )
 
     class Meta:
@@ -233,7 +249,7 @@ class OrderUpdateSerializer(serializers.ModelSerializer):
         fields = ["state"]
 
 
-# 6. Сериализаторы ответов ----
+# 7. Сериализаторы ответов ----
 class PaginatedProductResponseSerializer(serializers.Serializer):
     count = serializers.IntegerField(
         read_only=True, help_text="Общее количество товаров."

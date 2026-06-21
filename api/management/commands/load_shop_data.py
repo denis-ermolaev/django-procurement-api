@@ -5,10 +5,14 @@ from api.models import Category, Parameter, Product, ProductInfo, ProductParamet
 
 
 class Command(BaseCommand):
-    help = "Load shop YAML data into the database"
+    help = "Load or update shop YAML data without duplicating existing offers"
 
     def add_arguments(self, parser):
-        parser.add_argument("yaml_file", type=str)
+        parser.add_argument(
+            "yaml_file",
+            type=str,
+            help="Path to YAML file with shop, categories and goods sections.",
+        )
 
     def handle(self, *_, **options):
         # 1. Чтение и базовая проверка YAML ----
@@ -54,6 +58,8 @@ class Command(BaseCommand):
                 name=good["name"], defaults={"category": category}
             )
 
+            # 4.1. ProductInfo уникален в рамках товара, магазина и имени из прайса.
+            # Повторная загрузка обновляет остаток и цены вместо создания дубля.
             product_info, _ = ProductInfo.objects.update_or_create(
                 product=product,
                 shop=shop,
@@ -65,6 +71,8 @@ class Command(BaseCommand):
                 },
             )
 
+            # 4.2. Характеристики предложения заменяются целиком, чтобы удаленные из
+            # YAML параметры не оставались в БД после повторной загрузки.
             ProductParameter.objects.filter(product_info=product_info).delete()
             for param_name, param_value in good.get("parameters", {}).items():
                 parameter, _ = Parameter.objects.get_or_create(name=param_name)
