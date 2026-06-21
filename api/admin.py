@@ -54,10 +54,10 @@ class ProductParameterAdmin(admin.ModelAdmin):
 
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "state", "contact", "created_at")
-    list_filter = ("state", "created_at")
+    list_display = ("id", "user", "state", "contact", "dt")
+    list_filter = ("state", "dt")
     search_fields = ("user__email",)
-    readonly_fields = ("created_at",)
+    readonly_fields = ("dt",)
 
 
 @admin.register(OrderItem)

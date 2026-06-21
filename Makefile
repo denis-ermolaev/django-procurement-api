@@ -2,6 +2,10 @@
 pre-commit_host:
 	uv run pre-commit run --all-files
 
+## Запустить тесты на хосте с изолированной SQLite БД
+test_host:
+	uv run python manage.py test --settings=core.test_settings
+
 ## Установить pre-commit хуки
 pre-commit-install_host:
 	uv run pre-commit install

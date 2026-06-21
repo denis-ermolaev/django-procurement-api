@@ -88,7 +88,7 @@ class ContactSerializer(serializers.ModelSerializer):
 # 2. Other ----
 class AddToBasketSerializer(serializers.Serializer):
     product_info_id = serializers.IntegerField()
-    quantity = serializers.IntegerField()
+    quantity = serializers.IntegerField(min_value=1)
 
 
 class OrderConfirmSerializer(serializers.Serializer):

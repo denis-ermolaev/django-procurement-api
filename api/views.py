@@ -89,7 +89,7 @@ class ProductListView(APIView):
     )
     # 1. Список продуктов ----
     def get(self, request: Request):
-        queryset = Product.objects.all()
+        queryset = Product.objects.order_by("id")
 
         # Применяем фильтрацию
         filter_set = ProductFilter(request.query_params, queryset=queryset)
@@ -174,7 +174,7 @@ class BasketView(APIView):
             defaults={"state": "basket"},  # поля, которые заполнятся при создании
         )
 
-        product_info = ProductInfo.objects.get(id=product_info_id)
+        product_info = get_object_or_404(ProductInfo, id=product_info_id)
 
         order_item, created = OrderItem.objects.get_or_create(
             order=order,
@@ -339,9 +339,11 @@ class OrderListView(APIView):
     )
     def get(self, request: Request):
         pagination = self.Pagination()
-        orders = Order.objects.filter(user=request.user).exclude(
-            state="basket"
-        )  # исключаем корзины
+        orders = (
+            Order.objects.filter(user=request.user)
+            .exclude(state="basket")
+            .order_by("id")
+        )
         queryset = pagination.paginate_queryset(queryset=orders, request=request)
         serializer = OrderHistorySerializer(queryset, many=True)
         return pagination.get_paginated_response(serializer.data)
@@ -349,8 +351,8 @@ class OrderListView(APIView):
 
 # 2. Детальная информация о продукте ----
 class OrderDetailView(APIView):
-    def get(self, _, pk):
-        order = get_object_or_404(Order, pk=pk)
+    def get(self, request: Request, pk):
+        order = get_object_or_404(Order, pk=pk, user=request.user)
         serializer = OrderSerializer(order)
         return Response(serializer.data)
 
