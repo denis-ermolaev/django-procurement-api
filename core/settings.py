@@ -164,7 +164,7 @@ SPECTACULAR_SETTINGS = {
     "DESCRIPTION": (
         "API сервиса закупок. Основной сценарий: пользователь регистрируется через "
         "Djoser `POST /api/auth/users/`, активирует аккаунт по uid/token из письма `POST /api/auth/users/activation/`,"
-        " получает JWT через `/api/auth/jwt/create/`, передает access token в заголовке "
+        "получает JWT через `/api/auth/jwt/create/`, передает access token в заголовке "
         "`Authorization: Bearer <token>`, просматривает каталог, добавляет предложения "
         "товаров в корзину, сохраняет адрес доставки и подтверждает заказ. "
         "`Product` означает общий товар каталога, `ProductInfo` - предложение "
