@@ -55,6 +55,15 @@ python manage.py createsuperuser
 python manage.py test --settings=core.test_settings
 ```
 
+## 3.5. Загрузка демо-магазинов ----
+
+```bash
+python manage.py load_shop_data data/shop1.yaml
+python manage.py load_shop_data data/shop2.yaml
+```
+
+Команда идемпотентна: повторный запуск обновляет предложения магазина и их параметры без создания дублей.
+
 # 4. API conventions ----
 
 ## 4.1. Аутентификация ----

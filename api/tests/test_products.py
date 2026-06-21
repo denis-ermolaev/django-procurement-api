@@ -1,6 +1,7 @@
 from django.urls import reverse
 from rest_framework import status
 
+from api.models import ProductInfo
 from api.tests.base import APITestCase
 
 
@@ -36,6 +37,26 @@ class ProductAPITests(APITestCase):
                 self.assertEqual(response.status_code, status.HTTP_200_OK)
                 self.assertEqual(response.data["count"], 1)
                 self.assertEqual(response.data["results"][0]["id"], self.product.pk)
+
+    def test_product_list_filters_shared_product_by_shop_offer(self) -> None:
+        ProductInfo.objects.create(
+            product=self.product,
+            shop=self.other_shop,
+            name="Test Phone from second shop",
+            quantity=7,
+            price=95,
+            price_rrc=115,
+        )
+        self.authenticate()
+
+        response = self.api_client.get(
+            reverse("products"), {"shop_id": self.other_shop.pk}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 2)
+        product_ids = {product["id"] for product in response.data["results"]}
+        self.assertEqual(product_ids, {self.product.pk, self.other_product.pk})
 
     def test_invalid_numeric_filter_returns_bad_request(self) -> None:
         self.authenticate()

@@ -10,6 +10,7 @@ from api.models import Category, Product, ProductInfo, ProductParameter, Shop
 
 
 class LoadShopDataCommandTests(TestCase):
+    data_dir = Path(__file__).resolve().parents[2] / "data"
     yaml_data = """
 shop: Test shop
 url: https://shop.example.com
@@ -44,6 +45,29 @@ goods:
         product_info = ProductInfo.objects.get()
         self.assertEqual(product_info.quantity, 5)
         self.assertEqual(product_info.shop.url, "https://shop.example.com")
+
+    def test_repository_shop_fixtures_load_two_shops_without_duplicates(self) -> None:
+        shop1_path = self.data_dir / "shop1.yaml"
+        shop2_path = self.data_dir / "shop2.yaml"
+
+        call_command("load_shop_data", str(shop1_path), stdout=StringIO())
+        call_command("load_shop_data", str(shop2_path), stdout=StringIO())
+        call_command("load_shop_data", str(shop2_path), stdout=StringIO())
+
+        self.assertEqual(Shop.objects.count(), 2)
+        self.assertEqual(Category.objects.count(), 6)
+        self.assertEqual(Product.objects.count(), 18)
+        self.assertEqual(ProductInfo.objects.count(), 20)
+
+        shared_product = Product.objects.get(
+            name="Smartphone Xiaomi Mi 10T Pro 256GB (cosmic black)"
+        )
+        offers = ProductInfo.objects.filter(product=shared_product).order_by("price")
+        self.assertEqual(offers.count(), 2)
+        self.assertEqual(
+            [offer.shop.name for offer in offers], ["ТехноМаркет", "Связной"]
+        )
+        self.assertEqual([offer.price for offer in offers], [68000, 70000])
 
     def test_load_shop_data_requires_shop_name(self) -> None:
         with TemporaryDirectory() as tmp_dir:

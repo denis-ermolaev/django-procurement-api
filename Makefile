@@ -19,7 +19,16 @@ migrate:
 
 ## 2.2. Загрузить первоначальные данные в БД ----
 data_to_bd:
+	$(MAKE) data_to_bd_shop1
+	$(MAKE) data_to_bd_shop2
+
+## 2.3. Загрузить данные первого магазина ----
+data_to_bd_shop1:
 	docker compose exec web python manage.py load_shop_data /app/data/shop1.yaml
+
+## 2.4. Загрузить данные второго магазина ----
+data_to_bd_shop2:
+	docker compose exec web python manage.py load_shop_data /app/data/shop2.yaml
 
 # 3. Docker ----
 ## 3.1. Запустить Docker Compose без пересборки ----
