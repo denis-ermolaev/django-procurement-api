@@ -153,3 +153,30 @@ class OrderAPITests(APITestCase):
         self.assertEqual(mail.outbox[0].to, [self.user.email])
         self.assertEqual(mail.outbox[1].to, ["admin@example.com"])
         self.assertIn(f"Заказ #{order.pk}", mail.outbox[0].subject)
+
+    @override_settings(
+        EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+        ADMIN_EMAILS=[],
+    )
+    def test_order_confirmation_email_skips_admins_when_not_configured(self) -> None:
+        order = Order.objects.create(user=self.user, state="confirmed")
+
+        send_order_confirmation(order)
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, [self.user.email])
+
+    @override_settings(
+        EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+        ADMIN_EMAILS=["admin@example.com"],
+    )
+    def test_order_confirmation_email_skips_customer_without_email(self) -> None:
+        self.user.email = ""
+        self.user.save(update_fields=["email"])
+        order = Order.objects.create(user=self.user, state="confirmed")
+
+        send_order_confirmation(order)
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["admin@example.com"])
+        self.assertIn("Email клиента: None", mail.outbox[0].body)

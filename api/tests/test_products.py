@@ -1,6 +1,7 @@
 from django.urls import reverse
 from rest_framework import status
 
+from api.filters import ProductFilter
 from api.models import ProductInfo
 from api.tests.base import APITestCase
 
@@ -73,6 +74,14 @@ class ProductAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("parameter", response.data)
+
+    def test_parameter_filter_without_separator_returns_original_queryset(self) -> None:
+        queryset = ProductFilter.Meta.model.objects.order_by("id")
+        filter_set = ProductFilter()
+
+        filtered_queryset = filter_set.filter_by_parameter(queryset, "parameter", "bad")
+
+        self.assertEqual(list(filtered_queryset), list(queryset))
 
     def test_product_detail_returns_offer_and_handles_missing_id(self) -> None:
         self.authenticate()

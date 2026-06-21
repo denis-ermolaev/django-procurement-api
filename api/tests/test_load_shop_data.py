@@ -76,3 +76,46 @@ goods:
 
             with self.assertRaises(CommandError):
                 call_command("load_shop_data", str(yaml_path), stdout=StringIO())
+
+    def test_load_shop_data_updates_existing_shop_url(self) -> None:
+        updated_yaml = self.yaml_data.replace(
+            "https://shop.example.com", "https://updated.example.com"
+        )
+
+        with TemporaryDirectory() as tmp_dir:
+            yaml_path = Path(tmp_dir) / "shop.yaml"
+            yaml_path.write_text(self.yaml_data, encoding="utf-8")
+            call_command("load_shop_data", str(yaml_path), stdout=StringIO())
+
+            yaml_path.write_text(updated_yaml, encoding="utf-8")
+            call_command("load_shop_data", str(yaml_path), stdout=StringIO())
+
+        self.assertEqual(Shop.objects.count(), 1)
+        self.assertEqual(Shop.objects.get().url, "https://updated.example.com")
+
+    def test_load_shop_data_skips_goods_with_unknown_category(self) -> None:
+        yaml_data = """
+shop: Test shop
+categories:
+  - id: 1
+    name: Phones
+goods:
+  - id: 100
+    category: 999
+    name: Skipped Phone
+    price: 100
+    price_rrc: 120
+    quantity: 5
+"""
+
+        with TemporaryDirectory() as tmp_dir:
+            yaml_path = Path(tmp_dir) / "shop.yaml"
+            yaml_path.write_text(yaml_data, encoding="utf-8")
+            stderr = StringIO()
+
+            call_command(
+                "load_shop_data", str(yaml_path), stdout=StringIO(), stderr=stderr
+            )
+
+        self.assertEqual(Product.objects.count(), 0)
+        self.assertIn("Category id 999 not found", stderr.getvalue())

@@ -21,7 +21,6 @@ def send_order_confirmation(order: Order) -> None:
         f"Статус: {order.state}\n"
     )
 
-    # Отправляем клиенту
     if customer_email:
         send_mail(
             subject,

@@ -23,14 +23,20 @@ REST API сервиса закупок на Django REST Framework. Проект 
 cp .env.example .env
 ```
 
-Для локального запуска оставьте `DJANGO_DEBUG=True`. Перед продовой сборкой обязательно задайте уникальный `DJANGO_SECRET_KEY`, выключите debug и заполните `DJANGO_ALLOWED_HOSTS`.
+Для локального запуска оставьте `DJANGO_DEBUG=True`. Перед продовой сборкой обязательно задайте уникальный `DJANGO_SECRET_KEY`, выключите debug и заполните `DJANGO_ALLOWED_HOSTS`. Если секрет содержит `$`, оберните значение в одинарные кавычки, чтобы Docker Compose не пытался интерполировать его как переменную.
 
 ## 2.2. Запуск в Docker ----
 
 ```bash
-docker compose up -d --build
+make compose_without_build
 make migrate
 make data_to_bd
+```
+
+Если контейнер еще не собран или менялись зависимости/Dockerfile, выполните разовую пересборку:
+
+```bash
+make compose_build
 ```
 
 API будет доступен на `http://localhost:8000/`.
@@ -40,6 +46,8 @@ API будет доступен на `http://localhost:8000/`.
 - Swagger UI: `http://localhost:8000/api/docs/`
 - OpenAPI schema: `http://localhost:8000/api/schema/`
 - Django admin: `http://localhost:8000/admin/`
+
+Swagger UI доступен без JWT, но защищенные API-методы требуют авторизации через кнопку `Authorize` и токен в формате `Bearer <access>`.
 
 # 3. Переменные окружения ----
 
@@ -56,6 +64,7 @@ API будет доступен на `http://localhost:8000/`.
 
 - `DJANGO_DEBUG` - `True` для разработки, `False` для production.
 - `DJANGO_ALLOWED_HOSTS` - список host через запятую, например `api.example.com,localhost`.
+- `DJANGO_EMAIL_BACKEND` - backend отправки писем; по умолчанию консольный backend Django.
 - `DJANGO_DEFAULT_FROM_EMAIL` - отправитель сервисных писем.
 - `DJANGO_ADMIN_EMAILS` - список email администраторов через запятую.
 
@@ -76,6 +85,8 @@ docker compose exec web python manage.py createsuperuser
 ```
 
 ## 4.2. Основные эндпоинты ----
+
+Подробный API guide с проверенными примерами запросов и ответов находится в [docs/api.md](docs/api.md).
 
 - `GET /api/products/` - каталог товаров с пагинацией и фильтрами.
 - `GET /api/products/{id}/` - детальная информация о предложении `ProductInfo`.
@@ -115,7 +126,11 @@ make data_to_bd_shop2
 make migrate
 ```
 
-Цель Makefile запускает `makemigrations api` и `migrate` внутри контейнера `web`.
+Цель применяет существующие миграции внутри контейнера `web`. Для создания новых миграций во время разработки используйте:
+
+```bash
+make makemigrations
+```
 
 # 6. Проверки качества ----
 
@@ -127,13 +142,37 @@ make test_host
 
 Тесты используют `core.test_settings`: in-memory SQLite, locmem email backend и быстрый password hasher.
 
-## 6.2. Pre-commit ----
+Для итоговой проверки всего проекта используйте:
+
+```bash
+make check_host
+```
+
+Эта цель последовательно запускает покрытие, OpenAPI validation и pre-commit.
+
+## 6.2. Покрытие тестами ----
+
+```bash
+make coverage_host
+```
+
+Цель запускает Django tests через `coverage`, печатает отчет в терминал и формирует HTML-отчет в `htmlcov/index.html`. Минимальный порог покрытия задан в `pyproject.toml`.
+
+## 6.3. Pre-commit ----
 
 ```bash
 make pre-commit_host
 ```
 
 Проверки включают форматирование/линтинг Ruff, mypy, ty и базовые pre-commit hooks.
+
+## 6.4. Проверка Swagger/OpenAPI ----
+
+```bash
+make schema_validate_host
+```
+
+Цель генерирует OpenAPI schema через drf-spectacular, валидирует ее и падает при предупреждениях. Временный файл схемы пишется в `/tmp/procurement-openapi.yaml`.
 
 # 7. Production checklist ----
 
@@ -143,7 +182,7 @@ make pre-commit_host
 - Задать уникальный `DJANGO_SECRET_KEY`.
 - Заполнить `DJANGO_ALLOWED_HOSTS` реальными доменами.
 - Проверить `DJANGO_ADMIN_EMAILS` и рабочий email backend.
-- Прогнать `make test_host` и `make pre-commit_host`.
+- Прогнать `make check_host`.
 - Применить миграции на целевой базе.
 - Загрузить или обновить актуальный прайс через `load_shop_data`.
 

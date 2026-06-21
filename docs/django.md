@@ -1,6 +1,6 @@
 # 1. Django notes ----
 
-Краткая техническая памятка по проекту. Основные пользовательские инструкции находятся в [README.md](../README.md).
+Краткая техническая памятка по проекту. Основные пользовательские инструкции находятся в [README.md](../README.md), подробные примеры API - в [api.md](api.md).
 
 ## 1.1. Создание проекта ----
 
@@ -43,6 +43,13 @@ python manage.py makemigrations api
 python manage.py migrate
 ```
 
+В Makefile эти операции разделены:
+
+```bash
+make makemigrations
+make migrate
+```
+
 ## 3.3. Суперпользователь ----
 
 ```bash
@@ -55,7 +62,31 @@ python manage.py createsuperuser
 python manage.py test --settings=core.test_settings
 ```
 
-## 3.5. Загрузка демо-магазинов ----
+Для полной локальной проверки перед сдачей:
+
+```bash
+make check_host
+```
+
+## 3.5. Отчет покрытия ----
+
+```bash
+coverage run manage.py test --settings=core.test_settings
+coverage report
+coverage html
+```
+
+В Makefile это собрано в цель `make coverage_host`. HTML-отчет создается в `htmlcov/index.html`.
+
+## 3.6. Проверка OpenAPI ----
+
+```bash
+python manage.py spectacular --settings=core.test_settings --validate --fail-on-warn --file /tmp/procurement-openapi.yaml
+```
+
+В Makefile это собрано в цель `make schema_validate_host`. Проверка полезна перед сдачей, потому что ловит рассинхронизацию Swagger-схемы и сериализаторов.
+
+## 3.7. Загрузка демо-магазинов ----
 
 ```bash
 python manage.py load_shop_data data/shop1.yaml

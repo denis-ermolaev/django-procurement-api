@@ -142,12 +142,23 @@ class ProductListView(APIView):
                 description="Постраничный список товаров.",
                 examples=[
                     OpenApiExample(
-                        "Одна страница каталога",
+                        "Каталог после загрузки demo YAML",
                         value={
-                            "count": 2,
-                            "next": "http://testserver/api/products/?page=2&page_size=1",
+                            "count": 18,
+                            "next": "http://testserver/api/products/?page=2&page_size=2",
                             "previous": None,
-                            "results": [{"id": 1, "category": 1, "name": "Test Phone"}],
+                            "results": [
+                                {
+                                    "id": 1,
+                                    "category": 1,
+                                    "name": "Смартфон Apple iPhone XS Max 512GB (золотистый)",
+                                },
+                                {
+                                    "id": 2,
+                                    "category": 1,
+                                    "name": "Смартфон Apple iPhone XR 256GB (красный)",
+                                },
+                            ],
                         },
                         response_only=True,
                     )
@@ -194,6 +205,21 @@ class ProductDetailView(APIView):
             200: OpenApiResponse(
                 response=ProductInfoSerializer,
                 description="Данные предложения товара.",
+                examples=[
+                    OpenApiExample(
+                        "Предложение товара",
+                        value={
+                            "id": 1,
+                            "name": "Смартфон Apple iPhone XS Max 512GB (золотистый)",
+                            "quantity": 14,
+                            "price": 110000,
+                            "price_rrc": 116990,
+                            "product": 1,
+                            "shop": 1,
+                        },
+                        response_only=True,
+                    )
+                ],
             ),
             401: AUTH_REQUIRED_RESPONSE,
             404: OpenApiResponse(
@@ -236,10 +262,10 @@ class BasketView(APIView):
                         value=[
                             [
                                 {
-                                    "id": 7,
-                                    "order": 3,
-                                    "product_info": 15,
+                                    "id": 1,
                                     "quantity": 2,
+                                    "order": 1,
+                                    "product_info": 1,
                                 }
                             ]
                         ],
@@ -294,10 +320,10 @@ class BasketView(APIView):
                         "Позиция корзины",
                         value={
                             "data": {
-                                "id": 7,
-                                "order": 3,
-                                "product_info": 15,
+                                "id": 1,
                                 "quantity": 2,
+                                "order": 1,
+                                "product_info": 1,
                             }
                         },
                         response_only=True,
@@ -490,6 +516,24 @@ class ContactView(APIView):
             200: OpenApiResponse(
                 response=ContactResponseSerializer,
                 description="Созданный адрес доставки в обертке data.",
+                examples=[
+                    OpenApiExample(
+                        "Созданный адрес",
+                        value={
+                            "data": {
+                                "id": 1,
+                                "city": "Kaliningrad",
+                                "street": "Lenina",
+                                "house": "1",
+                                "structure": "",
+                                "building": "",
+                                "apartment": "10",
+                                "phone": "+70000000000",
+                            }
+                        },
+                        response_only=True,
+                    )
+                ],
             ),
             400: VALIDATION_ERROR_RESPONSE,
             401: AUTH_REQUIRED_RESPONSE,
@@ -654,8 +698,8 @@ class OrderListView(APIView):
                             "results": [
                                 {
                                     "id": 4,
-                                    "dt": "2026-06-21T12:00:00Z",
-                                    "total_sum": 300,
+                                    "dt": "2026-06-21T16:40:31.083167Z",
+                                    "total_sum": 220000,
                                     "state": "confirmed",
                                 }
                             ],
@@ -691,7 +735,20 @@ class OrderDetailView(APIView):
         tags=["Orders"],
         responses={
             200: OpenApiResponse(
-                response=OrderSerializer, description="Данные заказа."
+                response=OrderSerializer,
+                description="Данные заказа.",
+                examples=[
+                    OpenApiExample(
+                        "Заказ",
+                        value={
+                            "id": 1,
+                            "user": 2,
+                            "dt": "2026-06-21T16:40:31.083167Z",
+                            "state": "confirmed",
+                        },
+                        response_only=True,
+                    )
+                ],
             ),
             401: AUTH_REQUIRED_RESPONSE,
             404: NOT_FOUND_RESPONSE,
@@ -716,6 +773,18 @@ class OrderDetailView(APIView):
             200: OpenApiResponse(
                 response=OrderSerializer,
                 description="Обновленный заказ.",
+                examples=[
+                    OpenApiExample(
+                        "Заказ после PATCH",
+                        value={
+                            "id": 1,
+                            "user": 2,
+                            "dt": "2026-06-21T16:40:31.083167Z",
+                            "state": "new",
+                        },
+                        response_only=True,
+                    )
+                ],
             ),
             400: VALIDATION_ERROR_RESPONSE,
             401: AUTH_REQUIRED_RESPONSE,

@@ -136,3 +136,12 @@ class BasketAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertTrue(OrderItem.objects.filter(id=item.pk).exists())
+
+    def test_delete_item_requires_item_identifier(self) -> None:
+        order = Order.objects.create(user=self.user, state="basket")
+        self.authenticate()
+
+        response = self.api_client.delete(f"{reverse('basket')}?order_id={order.pk}")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("item_id", response.data)
