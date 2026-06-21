@@ -1,0 +1,18 @@
+# 1. Git и локальное окружение ----
+.git
+.venv
+.env
+
+# 2. Кэши Python и инструментов ----
+**/__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.ty/
+.pytest_cache/
+
+# 3. Локальные артефакты ----
+*.sqlite3
+htmlcov/
+media/
+staticfiles/

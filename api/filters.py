@@ -3,19 +3,16 @@ import django_filters
 from .models import Product
 
 
+# 1. Фильтры каталога ----
 class ProductFilter(django_filters.FilterSet):
-    # Поиск по названию товара
+    ## 1.1. Поиск и прямые фильтры ----
     search = django_filters.CharFilter(field_name="name", lookup_expr="icontains")
-
-    # Фильтрация по категории
     category_id = django_filters.NumberFilter(field_name="category_id")
 
-    # Фильтрация по магазину (товары, доступные в конкретном магазине)
+    ## 1.2. Фильтры по связанным предложениям ----
     shop_id = django_filters.NumberFilter(
         field_name="productinfo__shop_id", distinct=True
     )
-
-    # Диапазон цен (по предложениям)
     price_min = django_filters.NumberFilter(
         field_name="productinfo__price", lookup_expr="gte", distinct=True
     )
@@ -23,7 +20,7 @@ class ProductFilter(django_filters.FilterSet):
         field_name="productinfo__price", lookup_expr="lte", distinct=True
     )
 
-    # Фильтрация по характеристикам (параметрам)
+    ## 1.3. Фильтр по характеристикам ----
     parameter = django_filters.CharFilter(method="filter_by_parameter")
 
     class Meta:

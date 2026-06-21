@@ -24,20 +24,25 @@ dev = [
     "ty>=0.0.46",
     "uv>=0.11.16",
 ]
-# mypy - type checker с совместимостью с django
+
+# 1. mypy ----
 [tool.mypy]
 python_version = "3.10"
 plugins = ["mypy_django_plugin.main"]
 ignore_missing_imports = true
 cache_dir = "/dev/null"
+
 [tool.django-stubs]
 django_settings_module = "core.settings"
-# ty - как языковой сервер
+
+# 2. ty ----
 [tool.ty.environment]
 python-version = "3.10"
+
 [tool.ty.rules]
 invalid-method-override = "ignore"
-# ruff - линтер, форматтер, сортировка импортов
+
+# 3. Ruff ----
 [tool.ruff.lint]
 select = ["E", "F", "I"]
-ignore = ["E501"]
+ignore = ["E266", "E501"]

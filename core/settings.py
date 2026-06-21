@@ -14,28 +14,44 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
+
+# 1. Базовые пути и переменные окружения ----
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
+def env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
-# SECURITY WARNING: keep the secret key used in production secret!
+
+def env_list(name: str, default: str = "") -> list[str]:
+    value = os.getenv(name, default)
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+# 2. Безопасность ----
+DEBUG = env_bool("DJANGO_DEBUG", default=True)
+
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = "django-insecure-dev-only-change-me"
+    else:
+        raise ImproperlyConfigured(
+            "DJANGO_SECRET_KEY must be set when DJANGO_DEBUG=False."
+        )
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-
-ALLOWED_HOSTS: list[str] = []
+ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,testserver")
 
 
-# Application definition
-
+# 3. Приложения ----
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -48,10 +64,12 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt",
     "rest_framework_simplejwt.token_blacklist",
     "drf_spectacular",
-    "django_filters",  # Для фильтров
+    "django_filters",
     "api",
 ]
 
+
+# 4. Middleware и URL ----
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -82,24 +100,20 @@ TEMPLATES = [
 WSGI_APPLICATION = "core.wsgi.application"
 
 
-# Database
-# https://docs.djangoproject.com/en/5.2/ref/settings/#databases
-
+# 5. База данных ----
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": os.getenv("DB_NAME"),
         "USER": os.getenv("DB_USER"),
         "PASSWORD": os.getenv("DB_PASSWORD"),
-        "HOST": os.getenv("DB_HOST"),  # внутри контейнера будет "db"
-        "PORT": os.getenv("DB_PORT"),  # будет "5432"
+        "HOST": os.getenv("DB_HOST", "db"),
+        "PORT": os.getenv("DB_PORT", "5432"),
     }
 }
 
 
-# Password validation
-# https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
-
+# 6. Пароли ----
 AUTH_PASSWORD_VALIDATORS = [
     {
         "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
@@ -116,9 +130,7 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 
-# Internationalization
-# https://docs.djangoproject.com/en/5.2/topics/i18n/
-
+# 7. Локализация ----
 LANGUAGE_CODE = "en-us"
 
 TIME_ZONE = "UTC"
@@ -128,14 +140,11 @@ USE_I18N = True
 USE_TZ = True
 
 
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/5.2/howto/static-files/
-
+# 8. Статика ----
 STATIC_URL = "static/"
 
-# Default primary key field type
-# https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
+# 9. Django REST Framework ----
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 REST_FRAMEWORK = {
@@ -148,6 +157,8 @@ REST_FRAMEWORK = {
     ),
 }
 
+
+# 10. OpenAPI ----
 SPECTACULAR_SETTINGS = {
     "TITLE": "Procurement API",
     "DESCRIPTION": (
@@ -159,11 +170,11 @@ SPECTACULAR_SETTINGS = {
         "бизнес-эндпоинты `/api/products/`, `/api/basket/`, `/api/contact/` и "
         "`/api/orders/` требуют JWT-аутентификацию."
     ),
-    "VERSION": "1.0.0",  # Версия API
-    "SERVE_INCLUDE_SCHEMA": False,  # Скрывает саму схему OpenAPI из UI
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
     "COMPONENT_SPLIT_REQUEST": True,
     "SWAGGER_UI_SETTINGS": {
-        "persistAuthorization": True,  # не сбрасывать авторизацию
+        "persistAuthorization": True,
         "displayOperationId": True,
         "filter": True,
     },
@@ -197,8 +208,9 @@ SPECTACULAR_SETTINGS = {
 }
 
 
+# 11. JWT и Djoser ----
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(days=1),  # 15-30 минут
+    "ACCESS_TOKEN_LIFETIME": timedelta(days=1),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=30),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
@@ -211,8 +223,8 @@ AUTH_USER_MODEL = "api.User"
 DJOSER = {
     "LOGIN_FIELD": "email",
     "USER_ID_FIELD": "pk",
-    "SEND_ACTIVATION_EMAIL": True,  # включить отправку писем активации
-    "ACTIVATION_URL": "activate/{uid}/{token}",  # шаблон пути на фронтенде
+    "SEND_ACTIVATION_EMAIL": True,
+    "ACTIVATION_URL": "activate/{uid}/{token}",
     "SERIALIZERS": {
         "user_create": "api.serializers.UserCreateSerializer",
         "user": "api.serializers.UserSerializer",
@@ -220,14 +232,13 @@ DJOSER = {
     },
 }
 
-DEFAULT_FROM_EMAIL = "noreply@yourdomain.com"  # от кого письма
 
-EMAIL_BACKEND: str = (
-    "django.core.mail.backends.console.EmailBackend"  # Письма в консоль
+# 12. Email ----
+DEFAULT_FROM_EMAIL = os.getenv("DJANGO_DEFAULT_FROM_EMAIL", "noreply@example.com")
+
+EMAIL_BACKEND: str = os.getenv(
+    "DJANGO_EMAIL_BACKEND",
+    "django.core.mail.backends.console.EmailBackend",
 )
 
-# E-mail администраторов, им присылается смс при подтверждением заказа от пользователя
-ADMIN_EMAILS = [
-    "admin1@example.com",
-    "admin2@example.com",
-]
+ADMIN_EMAILS = env_list("DJANGO_ADMIN_EMAILS", "admin1@example.com,admin2@example.com")

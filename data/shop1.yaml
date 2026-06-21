@@ -1,4 +1,5 @@
 shop: Связной
+url: https://svyaznoy.example.com
 categories:
   - id: 224
     name: Смартфоны

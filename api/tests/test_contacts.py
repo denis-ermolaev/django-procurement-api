@@ -41,12 +41,13 @@ class ContactAPITests(APITestCase):
         self.assertIn("street", response.data)
         self.assertIn("phone", response.data)
 
-    def test_empty_contact_list_returns_not_found(self) -> None:
+    def test_empty_contact_list_returns_empty_data(self) -> None:
         self.authenticate()
 
         response = self.api_client.get(reverse("contact"))
 
-        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, {"data": []})
 
     def test_delete_contact_checks_ownership(self) -> None:
         own_contact = Contact.objects.create(user=self.user, **self.contact_payload)

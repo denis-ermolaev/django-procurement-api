@@ -21,6 +21,9 @@ class OrderAPITests(APITestCase):
     def test_confirm_order_changes_state_and_sends_notification(self) -> None:
         contact = Contact.objects.create(user=self.user, **self.contact_payload)
         order = Order.objects.create(user=self.user, state="basket")
+        OrderItem.objects.create(
+            order=order, product_info=self.product_info, quantity=2
+        )
         self.authenticate()
 
         with patch("api.views.send_order_confirmation") as send_confirmation:
@@ -43,6 +46,9 @@ class OrderAPITests(APITestCase):
         )
         other_order = Order.objects.create(user=self.other_user, state="basket")
         own_order = Order.objects.create(user=self.user, state="basket")
+        OrderItem.objects.create(
+            order=own_order, product_info=self.product_info, quantity=1
+        )
         self.authenticate()
 
         responses = (
@@ -60,6 +66,21 @@ class OrderAPITests(APITestCase):
 
         for response in responses:
             self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_confirm_order_rejects_empty_basket(self) -> None:
+        contact = Contact.objects.create(user=self.user, **self.contact_payload)
+        order = Order.objects.create(user=self.user, state="basket")
+        self.authenticate()
+
+        response = self.api_client.post(
+            reverse("order-confirm"),
+            {"order_id": order.pk, "contact_id": contact.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        order.refresh_from_db()
+        self.assertEqual(order.state, "basket")
 
     def test_order_history_excludes_basket_and_calculates_total(self) -> None:
         Order.objects.create(user=self.user, state="basket")

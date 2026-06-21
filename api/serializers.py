@@ -7,7 +7,7 @@ from rest_framework import serializers
 from .models import Contact, Order, OrderItem, Product, ProductInfo, User
 
 
-# 1. Model ----
+# 1. Сериализаторы пользователей ----
 class UserCreateSerializer(BaseUserCreateSerializer):
     class Meta(BaseUserCreateSerializer.Meta):
         model = User
@@ -23,7 +23,7 @@ class UserCreateSerializer(BaseUserCreateSerializer):
                 "required": False,
                 "default": "buyer",
                 "help_text": "Тип пользователя. По умолчанию создается покупатель.",
-            },  # значение по умолчанию, если не передано
+            },
             "password": {
                 "write_only": True,
                 "help_text": "Пароль пользователя. В ответах API не возвращается.",
@@ -43,12 +43,12 @@ class UserSerializer(BaseUserSerializer):
             "company",
             "position",
             "type",
-            # "is_active",
         )
 
 
+# 2. Сериализаторы каталога ----
 class ProductSerializer(serializers.ModelSerializer):
-    class Meta(BaseUserSerializer.Meta):
+    class Meta:
         model = Product
         fields = (
             "id",
@@ -63,7 +63,7 @@ class ProductSerializer(serializers.ModelSerializer):
 
 
 class ProductInfoSerializer(serializers.ModelSerializer):
-    class Meta(BaseUserSerializer.Meta):
+    class Meta:
         model = ProductInfo
         fields = "__all__"
         extra_kwargs = {
@@ -77,8 +77,9 @@ class ProductInfoSerializer(serializers.ModelSerializer):
         }
 
 
+# 3. Сериализаторы заказов ----
 class OrderSerializer(serializers.ModelSerializer):
-    class Meta(BaseUserSerializer.Meta):
+    class Meta:
         model = Order
         fields = ("id", "user", "dt", "state")
         extra_kwargs = {
@@ -90,7 +91,7 @@ class OrderSerializer(serializers.ModelSerializer):
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
-    class Meta(BaseUserSerializer.Meta):
+    class Meta:
         model = OrderItem
         fields = "__all__"
         extra_kwargs = {
@@ -101,10 +102,11 @@ class OrderItemSerializer(serializers.ModelSerializer):
         }
 
 
+# 4. Сериализаторы контактов ----
 class ContactSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(read_only=True, help_text="ID адреса доставки.")
 
-    class Meta(BaseUserSerializer.Meta):
+    class Meta:
         model = Contact
         fields = (
             "id",
@@ -127,10 +129,11 @@ class ContactSerializer(serializers.ModelSerializer):
         }
 
 
-# 2. Other ----
+# 5. Сериализаторы входных команд ----
 class AddToBasketSerializer(serializers.Serializer):
     product_info_id = serializers.IntegerField(
-        help_text="ID предложения товара, которое нужно добавить в корзину."
+        min_value=1,
+        help_text="ID предложения товара, которое нужно добавить в корзину.",
     )
     quantity = serializers.IntegerField(
         min_value=1,
@@ -138,12 +141,36 @@ class AddToBasketSerializer(serializers.Serializer):
     )
 
 
+class DeleteBasketItemSerializer(serializers.Serializer):
+    order_id = serializers.IntegerField(
+        min_value=1,
+        help_text="ID заказа-корзины, из которого удаляется позиция.",
+    )
+    item_id = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        help_text="ID позиции корзины OrderItem, которую нужно удалить.",
+    )
+    product_info_id = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        help_text="Устаревшее имя параметра. Временно принимается как item_id.",
+    )
+
+    def validate(self, attrs):
+        if not attrs.get("item_id") and not attrs.get("product_info_id"):
+            raise serializers.ValidationError(
+                {"item_id": "Передайте item_id позиции корзины."}
+            )
+        return attrs
+
+
 class OrderConfirmSerializer(serializers.Serializer):
     order_id = serializers.IntegerField(
-        help_text="ID заказа в статусе basket, который нужно подтвердить."
+        min_value=1, help_text="ID заказа в статусе basket, который нужно подтвердить."
     )
     contact_id = serializers.IntegerField(
-        help_text="ID адреса доставки текущего пользователя."
+        min_value=1, help_text="ID адреса доставки текущего пользователя."
     )
 
 
@@ -158,7 +185,6 @@ class OrderHistorySerializer(serializers.ModelSerializer):
 
     @extend_schema_field(OpenApiTypes.INT)
     def get_total_sum(self, obj: Order) -> int:
-        # вычисляем сумму заказа: сумма (quantity * price) для всех OrderItem
         total = 0
         for item in OrderItem.objects.filter(order=obj).select_related("product_info"):
             total += item.quantity * item.product_info.price
@@ -178,6 +204,7 @@ class OrderUpdateSerializer(serializers.ModelSerializer):
         fields = ["state"]
 
 
+# 6. Сериализаторы ответов ----
 class PaginatedProductResponseSerializer(serializers.Serializer):
     count = serializers.IntegerField(
         read_only=True, help_text="Общее количество товаров."

@@ -45,6 +45,14 @@ class ProductAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("category_id", response.data)
 
+    def test_invalid_parameter_filter_returns_bad_request(self) -> None:
+        self.authenticate()
+
+        response = self.api_client.get(reverse("products"), {"parameter": "bad"})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("parameter", response.data)
+
     def test_product_detail_returns_offer_and_handles_missing_id(self) -> None:
         self.authenticate()
 

@@ -1,4 +1,27 @@
-.venv
-**/**/__pycache__
+# 1. Локальное окружение ----
+.venv/
 .env
-.*/
+.env.*
+!.env.example
+.codex/
+.agents/
+.vscode/
+.idea/
+
+# 2. Python ----
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.sqlite3
+
+# 3. Кэши инструментов ----
+.mypy_cache/
+.ruff_cache/
+.ty/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 4. Django артефакты ----
+media/
+staticfiles/

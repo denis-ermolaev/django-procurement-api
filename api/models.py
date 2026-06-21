@@ -1,9 +1,7 @@
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import django_stubs_ext
 from django.contrib.auth.models import AbstractUser
-
-# from django.contrib.auth.base_user import BaseUserManager
 from django.contrib.auth.models import UserManager as BaseUserManager
 from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.db import models
@@ -31,16 +29,12 @@ USER_TYPE_CHOICES = (
 
 # 2. Модели авторизации ----
 class UserManager(BaseUserManager):
-    """
-    Миксин для управления пользователями
-    """
+    """Менеджер пользователей с email в качестве логина."""
 
     use_in_migrations = True
 
-    def _create_user(self, email, password, **extra_fields):
-        """
-        Create and save a user with the given username, email, and password.
-        """
+    def _create_user(self, email: str, password: str | None, **extra_fields: Any):
+        """Создать пользователя с нормализованным email и сохраненным паролем."""
         if not email:
             raise ValueError("The given email must be set")
         email = self.normalize_email(email)
@@ -49,12 +43,16 @@ class UserManager(BaseUserManager):
         user.save(using=self._db)
         return user
 
-    def create_user(self, email, password=None, **extra_fields):
+    def create_user(  # type: ignore[override]
+        self, email: str, password: str | None = None, **extra_fields: Any
+    ):
         extra_fields.setdefault("is_staff", False)
         extra_fields.setdefault("is_superuser", False)
         return self._create_user(email, password, **extra_fields)
 
-    def create_superuser(self, email, password, **extra_fields):
+    def create_superuser(  # type: ignore[override]
+        self, email: str, password: str, **extra_fields: Any
+    ):
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", True)
 
@@ -67,9 +65,7 @@ class UserManager(BaseUserManager):
 
 
 class User(AbstractUser):
-    """
-    Стандартная модель пользователей
-    """
+    """Пользователь с авторизацией по уникальному email."""
 
     REQUIRED_FIELDS = []
     objects: ClassVar[UserManager] = UserManager()
@@ -86,11 +82,8 @@ class User(AbstractUser):
             "Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."
         ),
         validators=[username_validator],
-        # error_messages={
-        #     "unique": _("A user with that username already exists."),
-        # },
-        unique=False,  # Вход и регестрация по email ?
-        blank=True,  # Поэтому эти поля не нужны ?
+        unique=False,
+        blank=True,
         default="",
     )
     is_active = models.BooleanField(
@@ -109,7 +102,8 @@ class User(AbstractUser):
     )
 
     def __str__(self):
-        return f"{self.first_name} {self.last_name}"
+        full_name = f"{self.first_name} {self.last_name}".strip()
+        return full_name or self.email
 
     class Meta:
         verbose_name = "Пользователь"
@@ -120,17 +114,26 @@ class User(AbstractUser):
 # 3. Модели api ----
 class Shop(models.Model):
     name = models.CharField(max_length=150)
-    url = models.URLField()
+    url = models.URLField(blank=True)
+
+    def __str__(self):
+        return self.name
 
 
 class Category(models.Model):
     shops = models.ManyToManyField(Shop)
     name = models.CharField(max_length=150)
 
+    def __str__(self):
+        return self.name
+
 
 class Product(models.Model):
     category = models.ForeignKey(Category, on_delete=models.CASCADE)
     name = models.CharField(max_length=150)
+
+    def __str__(self):
+        return self.name
 
 
 class ProductInfo(models.Model):
@@ -141,15 +144,24 @@ class ProductInfo(models.Model):
     price = models.IntegerField()
     price_rrc = models.IntegerField()
 
+    def __str__(self):
+        return f"{self.name} ({self.shop})"
+
 
 class Parameter(models.Model):
     name = models.CharField(max_length=150)
+
+    def __str__(self):
+        return self.name
 
 
 class ProductParameter(models.Model):
     product_info = models.ForeignKey(ProductInfo, on_delete=models.CASCADE)
     parameter = models.ForeignKey(Parameter, on_delete=models.CASCADE)
     value = models.CharField(max_length=200)
+
+    def __str__(self):
+        return f"{self.parameter}: {self.value}"
 
 
 class Contact(models.Model):
@@ -169,6 +181,9 @@ class Contact(models.Model):
     apartment = models.CharField(max_length=15, verbose_name="Квартира", blank=True)
     phone = models.CharField(max_length=20, verbose_name="Телефон")
 
+    def __str__(self):
+        return f"{self.city}, {self.street}, {self.phone}"
+
 
 class Order(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -179,6 +194,9 @@ class Order(models.Model):
     contact = models.ForeignKey(
         Contact, verbose_name="Контакт", blank=True, null=True, on_delete=models.CASCADE
     )
+
+    def __str__(self):
+        return f"Order #{self.pk} ({self.state})"
 
 
 class OrderItem(models.Model):
@@ -191,3 +209,6 @@ class OrderItem(models.Model):
         on_delete=models.CASCADE,
     )
     quantity = models.IntegerField()
+
+    def __str__(self):
+        return f"{self.product_info} x {self.quantity}"

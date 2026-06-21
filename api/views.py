@@ -1,4 +1,4 @@
-from django.shortcuts import get_list_or_404, get_object_or_404
+from django.shortcuts import get_object_or_404
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import (
     OpenApiExample,
@@ -6,6 +6,7 @@ from drf_spectacular.utils import (
     OpenApiResponse,
     extend_schema,
 )
+from rest_framework.exceptions import ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -21,6 +22,7 @@ from .serializers import (
     ContactListResponseSerializer,
     ContactResponseSerializer,
     ContactSerializer,
+    DeleteBasketItemSerializer,
     ErrorDetailSerializer,
     OrderConfirmResponseSerializer,
     OrderConfirmSerializer,
@@ -34,6 +36,7 @@ from .serializers import (
     ProductSerializer,
 )
 
+# 1. Общие схемы OpenAPI ----
 AUTH_REQUIRED_RESPONSE = OpenApiResponse(
     response=ErrorDetailSerializer,
     description="JWT access token не передан, просрочен или некорректен.",
@@ -55,6 +58,7 @@ BASKET_LIST_RESPONSE_SCHEMA = {
 }
 
 
+# 2. Каталог товаров ----
 class ProductListView(APIView):
     """
     Просмотр списка продуктов
@@ -89,7 +93,6 @@ class ProductListView(APIView):
                 location=OpenApiParameter.QUERY,
                 description="Количество товаров на страницу. Допустимый диапазон: 1-100.",
             ),
-            # Добавляем параметры фильтрации
             OpenApiParameter(
                 name="search",
                 type=OpenApiTypes.STR,
@@ -154,24 +157,28 @@ class ProductListView(APIView):
             401: AUTH_REQUIRED_RESPONSE,
         },
     )
-    # 1. Список продуктов ----
+    ## 2.1. Список продуктов ----
     def get(self, request: Request):
         queryset = Product.objects.order_by("id")
+        parameter = request.query_params.get("parameter")
+        if parameter and ":" not in parameter:
+            return Response(
+                {"parameter": ["Ожидаемый формат: имя_параметра:значение."]},
+                status=400,
+            )
 
-        # Применяем фильтрацию
         filter_set = ProductFilter(request.query_params, queryset=queryset)
         if not filter_set.is_valid():
             return Response(filter_set.errors, status=400)
         queryset = filter_set.qs
 
-        # Пагинация
         paginator = self.Pagination()
         page = paginator.paginate_queryset(queryset, request)
         serializer = self.serializer_class(page, many=True)
         return paginator.get_paginated_response(serializer.data)
 
 
-# 2. Детальная информация о продукте ----
+## 2.2. Детальная информация о предложении ----
 class ProductDetailView(APIView):
     serializer_class = ProductInfoSerializer
 
@@ -195,6 +202,7 @@ class ProductDetailView(APIView):
             ),
         },
     )
+    ## 2.2. Получить предложение ----
     def get(self, _, pk):
         product_info = get_object_or_404(ProductInfo, pk=pk)
         serializer = ProductInfoSerializer(product_info)
@@ -252,14 +260,12 @@ class BasketView(APIView):
         orders = Order.objects.filter(
             user=request.user,
             state="basket",
-        )
+        ).order_by("id")
         result = []
         for order in orders:
             result.append(
                 OrderItemSerializer(
-                    OrderItem.objects.filter(
-                        order=order,
-                    ),
+                    OrderItem.objects.filter(order=order),
                     many=True,
                 ).data
             )
@@ -274,7 +280,8 @@ class BasketView(APIView):
         description=(
             "Добавляет предложение ProductInfo в корзину текущего пользователя. "
             "Если открытой корзины нет, она создается автоматически. Если такая "
-            "позиция уже есть в корзине, quantity увеличивается на переданное значение."
+            "позиция уже есть в корзине, quantity увеличивается на переданное значение. "
+            "Итоговое количество не может превышать остаток ProductInfo.quantity."
         ),
         tags=["Basket"],
         request=AddToBasketSerializer,
@@ -313,14 +320,30 @@ class BasketView(APIView):
         product_info_id = serializer.validated_data["product_info_id"]
         quantity = serializer.validated_data["quantity"]
 
-        # TODO: Если quantity больше, чем товаров в наличии -> ошибка
-        order, _ = Order.objects.get_or_create(
-            user=request.user,
-            state="basket",
-            defaults={"state": "basket"},  # поля, которые заполнятся при создании
-        )
-
         product_info = get_object_or_404(ProductInfo, id=product_info_id)
+        order = Order.objects.filter(user=request.user, state="basket").first()
+        current_quantity = 0
+        if order:
+            current_quantity = (
+                OrderItem.objects.filter(order=order, product_info=product_info)
+                .values_list("quantity", flat=True)
+                .first()
+                or 0
+            )
+
+        if current_quantity + quantity > product_info.quantity:
+            raise ValidationError(
+                {
+                    "quantity": (
+                        "Запрошенное количество превышает доступный остаток. "
+                        f"Доступно: {product_info.quantity}, уже в корзине: "
+                        f"{current_quantity}."
+                    )
+                }
+            )
+
+        if not order:
+            order = Order.objects.create(user=request.user, state="basket")
 
         order_item, created = OrderItem.objects.get_or_create(
             order=order,
@@ -329,7 +352,6 @@ class BasketView(APIView):
         )
 
         if not created:
-            # Если позиция уже была – увеличиваем количество
             order_item.quantity += quantity
             order_item.save()
 
@@ -347,17 +369,24 @@ class BasketView(APIView):
         summary="Удалить позицию из корзины",
         description=(
             "Удаляет позицию OrderItem из корзины текущего пользователя. "
-            "Текущий контракт сохраняет имя query-параметра product_info_id, "
-            "но ожидает в нем id позиции корзины OrderItem."
+            "Основной параметр для удаления: item_id. Старое имя product_info_id "
+            "временно поддерживается как алиас для обратной совместимости."
         ),
         tags=["Basket"],
         parameters=[
             OpenApiParameter(
-                name="product_info_id",
+                name="item_id",
                 type=OpenApiTypes.INT,
-                required=True,
+                required=False,
                 location=OpenApiParameter.QUERY,
                 description="ID позиции корзины OrderItem, которую нужно удалить.",
+            ),
+            OpenApiParameter(
+                name="product_info_id",
+                type=OpenApiTypes.INT,
+                required=False,
+                location=OpenApiParameter.QUERY,
+                description="Устаревший алиас item_id.",
             ),
             OpenApiParameter(
                 name="order_id",
@@ -369,19 +398,25 @@ class BasketView(APIView):
         ],
         responses={
             204: OpenApiResponse(description="Позиция удалена, тело ответа пустое."),
+            400: VALIDATION_ERROR_RESPONSE,
             401: AUTH_REQUIRED_RESPONSE,
             404: NOT_FOUND_RESPONSE,
         },
     )
     ## 3.3. Удалить товар из корзины ----
     def delete(self, request: Request):
-        product_info_id = request.GET.get("product_info_id")
-        order_id = request.GET.get("order_id")
+        serializer = DeleteBasketItemSerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        order_id = serializer.validated_data["order_id"]
+        item_id = (
+            serializer.validated_data.get("item_id")
+            or serializer.validated_data["product_info_id"]
+        )
 
-        order = get_object_or_404(Order, id=order_id, user=request.user)
+        order = get_object_or_404(Order, id=order_id, user=request.user, state="basket")
 
-        product_info = get_object_or_404(OrderItem, id=product_info_id, order=order)
-        product_info.delete()
+        order_item = get_object_or_404(OrderItem, id=item_id, order=order)
+        order_item.delete()
 
         return Response(status=204)
 
@@ -399,7 +434,7 @@ class ContactView(APIView):
         summary="Список адресов доставки",
         description=(
             "Возвращает адреса доставки текущего пользователя в обертке data. "
-            "Если у пользователя нет сохраненных адресов, текущая реализация возвращает 404."
+            "Если адресов еще нет, возвращается пустой список."
         ),
         tags=["Contacts"],
         responses={
@@ -428,17 +463,11 @@ class ContactView(APIView):
                 ],
             ),
             401: AUTH_REQUIRED_RESPONSE,
-            404: OpenApiResponse(
-                response=ErrorDetailSerializer,
-                description="У текущего пользователя нет сохраненных адресов доставки.",
-            ),
         },
     )
+    ## 4.1. Получить адреса доставки ----
     def get(self, request: Request):
-        query = Contact.objects.filter(user=request.user)
-
-        items = get_list_or_404(query)
-
+        items = Contact.objects.filter(user=request.user).order_by("id")
         serializer = self.serializer_class(items, many=True)
 
         return Response(
@@ -466,6 +495,7 @@ class ContactView(APIView):
             401: AUTH_REQUIRED_RESPONSE,
         },
     )
+    ## 4.2. Создать адрес доставки ----
     def post(self, request: Request):
         serializer = self.serializer_class(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -501,10 +531,11 @@ class ContactView(APIView):
             404: NOT_FOUND_RESPONSE,
         },
     )
+    ## 4.3. Удалить адрес доставки ----
     def delete(self, request: Request):
-        id = request.GET.get("id")
+        contact_id = request.GET.get("id")
 
-        contact = get_object_or_404(Contact, id=id, user=request.user)
+        contact = get_object_or_404(Contact, id=contact_id, user=request.user)
         contact.delete()
 
         return Response(status=204)
@@ -522,7 +553,8 @@ class OrderConfirmView(APIView):
         description=(
             "Переводит заказ текущего пользователя из статуса basket в confirmed, "
             "привязывает выбранный адрес доставки и отправляет e-mail уведомления. "
-            "И заказ, и адрес должны принадлежать текущему пользователю."
+            "И заказ, и адрес должны принадлежать текущему пользователю; заказ должен "
+            "содержать хотя бы одну позицию."
         ),
         tags=["Orders"],
         request=OrderConfirmSerializer,
@@ -549,6 +581,7 @@ class OrderConfirmView(APIView):
             ),
         },
     )
+    ## 5.1. Подтвердить заказ ----
     def post(self, request: Request):
         serializer = OrderConfirmSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -556,13 +589,14 @@ class OrderConfirmView(APIView):
         order_id = serializer.validated_data["order_id"]
         contact_id = serializer.validated_data["contact_id"]
 
-        # Проверяем, что заказ существует, принадлежит пользователю и имеет статус корзины
         order = get_object_or_404(Order, id=order_id, user=request.user, state="basket")
+        if not OrderItem.objects.filter(order=order).exists():
+            raise ValidationError(
+                {"order_id": "Нельзя подтвердить заказ без позиций в корзине."}
+            )
 
-        # Проверяем, что контакт существует и принадлежит пользователю
         contact = get_object_or_404(Contact, id=contact_id, user=request.user)
 
-        # Обновляем заказ: меняем статус и привязываем контакт
         order.state = "confirmed"
         order.contact = contact
         order.save()
@@ -633,6 +667,7 @@ class OrderListView(APIView):
             401: AUTH_REQUIRED_RESPONSE,
         },
     )
+    ## 6.1. Получить историю заказов ----
     def get(self, request: Request):
         pagination = self.Pagination()
         orders = (
@@ -645,7 +680,7 @@ class OrderListView(APIView):
         return pagination.get_paginated_response(serializer.data)
 
 
-# 2. Детальная информация о продукте ----
+# 7. Детальная информация о заказе ----
 class OrderDetailView(APIView):
     serializer_class = OrderSerializer
 
@@ -662,6 +697,7 @@ class OrderDetailView(APIView):
             404: NOT_FOUND_RESPONSE,
         },
     )
+    ## 7.1. Получить заказ ----
     def get(self, request: Request, pk):
         order = get_object_or_404(Order, pk=pk, user=request.user)
         serializer = OrderSerializer(order)
@@ -686,20 +722,15 @@ class OrderDetailView(APIView):
             404: NOT_FOUND_RESPONSE,
         },
     )
+    ## 7.2. Обновить заказ ----
     def patch(self, request, pk):
         order = get_object_or_404(Order, pk=pk, user=request.user)
         serializer = OrderUpdateSerializer(order, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        # Возвращаем полную информацию обновлённого заказа
         return Response(OrderSerializer(order).data, status=200)
 
 
-# TODO: Поставщик:
-# через API информирует сервис об обновлении прайса,
-# может включать и отключать приём заказов,
-# может получать список оформленных заказов (с товарами из его прайса).
-
-
-# TODO: отправка накладной на email администратора (для исполнения заказа),
-# TODO: отправка заказа на email клиента (подтверждение приёма заказа).
+# 8. Запланированные расширения ----
+# Поставщик сможет обновлять прайс, управлять приемом заказов и получать список
+# оформленных заказов с товарами из своего прайс-листа.
