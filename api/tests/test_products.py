@@ -2,7 +2,7 @@ from django.urls import reverse
 from rest_framework import status
 
 from api.filters import ProductFilter
-from api.models import ProductInfo
+from api.models import Parameter, ProductInfo, ProductParameter
 from api.tests.base import APITestCase
 
 
@@ -58,6 +58,93 @@ class ProductAPITests(APITestCase):
         self.assertEqual(response.data["count"], 2)
         product_ids = {product["id"] for product in response.data["results"]}
         self.assertEqual(product_ids, {self.product.pk, self.other_product.pk})
+
+    def test_product_list_returns_shared_product_once_when_multiple_offers_match(
+        self,
+    ) -> None:
+        ProductInfo.objects.create(
+            product=self.product,
+            shop=self.other_shop,
+            name="Test Phone from second shop",
+            quantity=7,
+            price=95,
+            price_rrc=115,
+        )
+        self.authenticate()
+
+        response = self.api_client.get(
+            reverse("products"), {"price_min": 90, "price_max": 110}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        product_ids = [product["id"] for product in response.data["results"]]
+        self.assertEqual(product_ids.count(self.product.pk), 1)
+        self.assertIn(self.product.pk, product_ids)
+
+    def test_product_list_combines_shop_and_price_filters_on_same_offer(
+        self,
+    ) -> None:
+        ProductInfo.objects.create(
+            product=self.product,
+            shop=self.other_shop,
+            name="Test Phone expensive offer",
+            quantity=7,
+            price=1000,
+            price_rrc=1100,
+        )
+        self.authenticate()
+
+        response = self.api_client.get(
+            reverse("products"), {"shop_id": self.other_shop.pk, "price_max": 100}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 0)
+
+    def test_product_list_combines_price_range_on_same_offer(self) -> None:
+        ProductInfo.objects.create(
+            product=self.product,
+            shop=self.other_shop,
+            name="Test Phone expensive offer",
+            quantity=7,
+            price=200,
+            price_rrc=220,
+        )
+        self.authenticate()
+
+        response = self.api_client.get(
+            reverse("products"), {"price_min": 150, "price_max": 150}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 0)
+
+    def test_product_list_combines_shop_and_parameter_filters_on_same_offer(
+        self,
+    ) -> None:
+        other_offer = ProductInfo.objects.create(
+            product=self.product,
+            shop=self.other_shop,
+            name="Test Phone white offer",
+            quantity=7,
+            price=95,
+            price_rrc=115,
+        )
+        color = Parameter.objects.get(name="color")
+        ProductParameter.objects.create(
+            product_info=other_offer,
+            parameter=color,
+            value="white",
+        )
+        self.authenticate()
+
+        response = self.api_client.get(
+            reverse("products"),
+            {"shop_id": self.other_shop.pk, "parameter": "color:black"},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 0)
 
     def test_invalid_numeric_filter_returns_bad_request(self) -> None:
         self.authenticate()

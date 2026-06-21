@@ -1,7 +1,7 @@
 from django.urls import reverse
 from rest_framework import status
 
-from api.models import Order, OrderItem
+from api.models import Order, OrderItem, ProductInfo
 from api.tests.base import APITestCase
 
 
@@ -83,6 +83,44 @@ class BasketAPITests(APITestCase):
             product_info=self.product_info, order__user=self.user
         )
         self.assertEqual(item.quantity, 9)
+
+    def test_add_shared_product_from_two_shops_creates_separate_items(self) -> None:
+        second_shop_offer = ProductInfo.objects.create(
+            product=self.product,
+            shop=self.other_shop,
+            name="Test Phone from second shop",
+            quantity=7,
+            price=95,
+            price_rrc=115,
+        )
+        self.authenticate()
+
+        first_response = self.api_client.post(
+            reverse("basket"),
+            {"product_info_id": self.product_info.pk, "quantity": 2},
+            format="json",
+        )
+        second_response = self.api_client.post(
+            reverse("basket"),
+            {"product_info_id": second_shop_offer.pk, "quantity": 3},
+            format="json",
+        )
+        basket_response = self.api_client.get(reverse("basket"))
+
+        self.assertEqual(first_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(second_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(basket_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(basket_response.data), 2)
+        basket_by_offer = {
+            item["product_info"]: item["quantity"] for item in basket_response.data
+        }
+        self.assertEqual(
+            basket_by_offer,
+            {
+                self.product_info.pk: 2,
+                second_shop_offer.pk: 3,
+            },
+        )
 
     def test_get_basket_returns_only_authenticated_users_items(self) -> None:
         own_order = Order.objects.create(user=self.user, state="basket")

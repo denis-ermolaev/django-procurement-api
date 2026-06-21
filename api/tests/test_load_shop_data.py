@@ -59,15 +59,22 @@ goods:
         self.assertEqual(Product.objects.count(), 18)
         self.assertEqual(ProductInfo.objects.count(), 20)
 
-        shared_product = Product.objects.get(
-            name="Smartphone Xiaomi Mi 10T Pro 256GB (cosmic black)"
-        )
-        offers = ProductInfo.objects.filter(product=shared_product).order_by("price")
-        self.assertEqual(offers.count(), 2)
-        self.assertEqual(
-            [offer.shop.name for offer in offers], ["ТехноМаркет", "Связной"]
-        )
-        self.assertEqual([offer.price for offer in offers], [68000, 70000])
+        shared_products = {
+            "Смартфон Apple iPhone XR 256GB (черный)": [63000, 65000],
+            "Smartphone Xiaomi Mi 10T Pro 256GB (cosmic black)": [68000, 70000],
+        }
+        for product_name, expected_prices in shared_products.items():
+            with self.subTest(product_name=product_name):
+                shared_product = Product.objects.get(name=product_name)
+                offers = ProductInfo.objects.filter(product=shared_product).order_by(
+                    "price"
+                )
+
+                self.assertEqual(offers.count(), 2)
+                self.assertEqual(
+                    [offer.shop.name for offer in offers], ["ТехноМаркет", "Связной"]
+                )
+                self.assertEqual([offer.price for offer in offers], expected_prices)
 
     def test_load_shop_data_requires_shop_name(self) -> None:
         with TemporaryDirectory() as tmp_dir:
