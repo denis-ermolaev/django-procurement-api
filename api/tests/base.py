@@ -38,9 +38,11 @@ class APITestCase(TestCase):
             password="test-password",
             is_active=True,
         )
-        self.shop = Shop.objects.create(name="Main shop", url="https://shop.test")
+        self.shop = Shop.objects.create(
+            name="Main shop", url="https://shop.test", status="active"
+        )
         self.other_shop = Shop.objects.create(
-            name="Other shop", url="https://other-shop.test"
+            name="Other shop", url="https://other-shop.test", status="active"
         )
         self.category = Category.objects.create(name="Phones")
         self.category.shops.add(self.shop)

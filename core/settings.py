@@ -169,6 +169,9 @@ SPECTACULAR_SETTINGS = {
         "получает JWT через `/api/auth/jwt/create/`, передает access token в заголовке "
         "`Authorization: Bearer <token>`, просматривает каталог, добавляет предложения "
         "товаров в корзину, сохраняет адрес доставки и подтверждает заказ. "
+        "Магазин регистрируется через отдельный endpoint `/api/shops/register/`, "
+        "после чего администратор одобряет или блокирует заявку магазина через "
+        "admin endpoints. "
         "`Product` означает общий товар каталога, `ProductInfo` - предложение "
         "конкретного магазина с ценой и остатком. Корзина хранится как заказ в "
         "статусе `basket`; история заказов показывает только оформленные заказы. "
@@ -190,6 +193,20 @@ SPECTACULAR_SETTINGS = {
                 "Каталог товаров Product и предложения магазинов ProductInfo. "
                 "Список возвращает товары, фильтры по цене/магазину/характеристикам "
                 "работают через связанные предложения."
+            ),
+        },
+        {
+            "name": "Shops",
+            "description": (
+                "Регистрация магазина и публичные операции поставщика. "
+                "Новый магазин получает статус pending до одобрения администратором."
+            ),
+        },
+        {
+            "name": "Admin",
+            "description": (
+                "Административные операции платформы. Доступны только пользователям "
+                "с is_staff=True и type=admin."
             ),
         },
         {
@@ -219,14 +236,18 @@ SPECTACULAR_SETTINGS = {
     "ENUM_NAME_OVERRIDES": {
         "OrderStateEnum": "api.models.STATE_CHOICES",
         "OrderUpdateStateEnum": [
-            "new",
             "confirmed",
-            "assembled",
+            "processing",
             "sent",
             "delivered",
+            "partially_canceled",
             "canceled",
         ],
         "UserTypeEnum": "api.models.USER_TYPE_CHOICES",
+        "ShopStatusEnum": "api.models.SHOP_STATUS_CHOICES",
+        "OrderItemStateEnum": "api.models.ORDER_ITEM_STATE_CHOICES",
+        "ArchiveStatusEnum": "api.models.ARCHIVE_STATUS_CHOICES",
+        "ProductInfoStatusEnum": "api.models.PRODUCT_INFO_STATUS_CHOICES",
     },
 }
 

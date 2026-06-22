@@ -1,3 +1,4 @@
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 
 from api.models import (
@@ -42,6 +43,15 @@ class UserManagerTests(TestCase):
 
         self.assertTrue(user.is_staff)
         self.assertTrue(user.is_superuser)
+        self.assertEqual(user.type, "admin")
+
+    def test_create_superuser_requires_admin_type(self) -> None:
+        with self.assertRaisesMessage(ValueError, "type='admin'"):
+            User.objects.create_superuser(
+                email="admin@example.com",
+                password="test-password",
+                type="buyer",
+            )
 
 
 class ModelStringRepresentationTests(TestCase):
@@ -113,3 +123,54 @@ class ModelStringRepresentationTests(TestCase):
         )
         self.assertEqual(str(self.order), f"Order #{self.order.pk} (confirmed)")
         self.assertEqual(str(self.order_item), "Test Phone 128GB (Main shop) x 2")
+
+
+class DomainConstraintTests(TestCase):
+    def setUp(self) -> None:
+        self.user = User.objects.create_user(
+            email="buyer@example.com",
+            password="test-password",
+            is_active=True,
+        )
+        self.shop = Shop.objects.create(name="Main shop", status="active")
+        self.category = Category.objects.create(name="Phones")
+        self.category.shops.add(self.shop)
+        self.product = Product.objects.create(name="Test Phone", category=self.category)
+        self.product_info = ProductInfo.objects.create(
+            product=self.product,
+            shop=self.shop,
+            name="Test Phone 128GB",
+            quantity=10,
+            reserved_quantity=2,
+            price=100,
+            price_rrc=120,
+        )
+
+    def test_product_info_rejects_invalid_numeric_values(self) -> None:
+        invalid_values = (
+            {"quantity": -1, "reserved_quantity": 0, "price": 100, "price_rrc": 120},
+            {"quantity": 1, "reserved_quantity": 2, "price": 100, "price_rrc": 120},
+            {"quantity": 1, "reserved_quantity": 0, "price": 0, "price_rrc": 120},
+            {"quantity": 1, "reserved_quantity": 0, "price": 100, "price_rrc": -1},
+        )
+
+        for values in invalid_values:
+            with self.subTest(values=values):
+                with self.assertRaises(IntegrityError), transaction.atomic():
+                    ProductInfo.objects.create(
+                        product=self.product,
+                        shop=self.shop,
+                        name="Invalid offer",
+                        **values,
+                    )
+
+    def test_order_item_rejects_non_positive_quantity(self) -> None:
+        order = Order.objects.create(user=self.user, state="confirmed")
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            OrderItem.objects.create(
+                order=order,
+                product_info=self.product_info,
+                quantity=0,
+                state="confirmed",
+            )

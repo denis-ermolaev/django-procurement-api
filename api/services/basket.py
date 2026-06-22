@@ -57,7 +57,14 @@ def add_basket_item(user: User, *, product_info_id: int, quantity: int) -> Order
         quantity,
     )
 
-    product_info = get_object_or_404(ProductInfo, id=product_info_id)
+    product_info = get_object_or_404(
+        ProductInfo,
+        id=product_info_id,
+        status="active",
+        shop__status="active",
+        product__status="active",
+        product__category__status="active",
+    )
     order = get_current_basket(user)
     current_quantity = 0
     if order:
@@ -68,7 +75,8 @@ def add_basket_item(user: User, *, product_info_id: int, quantity: int) -> Order
             or 0
         )
 
-    if current_quantity + quantity > product_info.quantity:
+    available_quantity = max(product_info.quantity - product_info.reserved_quantity, 0)
+    if current_quantity + quantity > available_quantity:
         logger.warning(
             (
                 "basket_add_rejected_stock user_id=%s product_info_id=%s "
@@ -78,13 +86,13 @@ def add_basket_item(user: User, *, product_info_id: int, quantity: int) -> Order
             product_info.pk,
             quantity,
             current_quantity,
-            product_info.quantity,
+            available_quantity,
         )
         raise ValidationError(
             {
                 "quantity": (
                     "Запрошенное количество превышает доступный остаток. "
-                    f"Доступно: {product_info.quantity}, уже в корзине: "
+                    f"Доступно: {available_quantity}, уже в корзине: "
                     f"{current_quantity}."
                 )
             }
@@ -97,7 +105,7 @@ def add_basket_item(user: User, *, product_info_id: int, quantity: int) -> Order
     order_item, created = OrderItem.objects.get_or_create(
         order=order,
         product_info=product_info,
-        defaults={"quantity": quantity},
+        defaults={"quantity": quantity, "state": "basket"},
     )
 
     if not created:

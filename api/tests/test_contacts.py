@@ -1,7 +1,7 @@
 from django.urls import reverse
 from rest_framework import status
 
-from api.models import Contact
+from api.models import Contact, Order
 from api.tests.base import APITestCase
 
 
@@ -64,3 +64,18 @@ class ContactAPITests(APITestCase):
         self.assertEqual(forbidden_response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.assertFalse(Contact.objects.filter(id=own_contact.pk).exists())
+
+    def test_delete_contact_bound_to_order_hides_without_physical_delete(self) -> None:
+        contact = Contact.objects.create(user=self.user, **self.contact_payload)
+        Order.objects.create(user=self.user, state="confirmed", contact=contact)
+        self.authenticate()
+
+        delete_response = self.api_client.delete(
+            f"{reverse('contact')}?id={contact.pk}"
+        )
+        list_response = self.api_client.get(reverse("contact"))
+
+        self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
+        contact.refresh_from_db()
+        self.assertTrue(contact.is_deleted)
+        self.assertEqual(list_response.data, {"data": []})

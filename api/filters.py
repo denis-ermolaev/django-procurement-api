@@ -31,7 +31,10 @@ class ProductFilter(django_filters.FilterSet):
     def filter_queryset(self, queryset):
         queryset = super().filter_queryset(queryset)
 
-        offer_filters = {}
+        offer_filters = {
+            "productinfo__status": "active",
+            "productinfo__shop__status": "active",
+        }
         shop_id = self.form.cleaned_data.get("shop_id")
         price_min = self.form.cleaned_data.get("price_min")
         price_max = self.form.cleaned_data.get("price_max")

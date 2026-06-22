@@ -165,6 +165,7 @@ class BasketAPITests(APITestCase):
                     "order": current_order.pk,
                     "product_info": self.product_info.pk,
                     "quantity": 2,
+                    "state": "basket",
                 }
             ],
         )

@@ -5,8 +5,10 @@ from tempfile import TemporaryDirectory
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase
+from rest_framework import status
+from rest_framework.test import APIClient
 
-from api.models import Category, Product, ProductInfo, ProductParameter, Shop
+from api.models import Category, Product, ProductInfo, ProductParameter, Shop, User
 
 
 class LoadShopDataCommandTests(TestCase):
@@ -45,6 +47,7 @@ goods:
         product_info = ProductInfo.objects.get()
         self.assertEqual(product_info.quantity, 5)
         self.assertEqual(product_info.shop.url, "https://shop.example.com")
+        self.assertEqual(product_info.shop.status, "active")
 
     def test_repository_shop_fixtures_load_two_shops_without_duplicates(self) -> None:
         shop1_path = self.data_dir / "shop1.yaml"
@@ -58,6 +61,17 @@ goods:
         self.assertEqual(Category.objects.count(), 6)
         self.assertEqual(Product.objects.count(), 18)
         self.assertEqual(ProductInfo.objects.count(), 20)
+
+        client = APIClient()
+        user = User.objects.create_user(
+            email="buyer@example.com",
+            password="test-password",
+            is_active=True,
+        )
+        client.force_authenticate(user=user)
+        response = client.get("/api/products/", {"page_size": 100})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 18)
 
         shared_products = {
             "Смартфон Apple iPhone XR 256GB (черный)": [63000, 65000],
@@ -99,6 +113,54 @@ goods:
 
         self.assertEqual(Shop.objects.count(), 1)
         self.assertEqual(Shop.objects.get().url, "https://updated.example.com")
+
+    def test_load_shop_data_reactivates_seed_entities_for_api_visibility(self) -> None:
+        shop = Shop.objects.create(
+            name="Test shop",
+            url="https://old.example.com",
+            status="pending",
+        )
+        category = Category.objects.create(name="Phones", status="archived")
+        category.shops.add(shop)
+        product = Product.objects.create(
+            name="Test Phone",
+            category=category,
+            status="archived",
+        )
+        ProductInfo.objects.create(
+            product=product,
+            shop=shop,
+            name="Test Phone",
+            quantity=1,
+            price=50,
+            price_rrc=60,
+            status="hidden",
+        )
+
+        with TemporaryDirectory() as tmp_dir:
+            yaml_path = Path(tmp_dir) / "shop.yaml"
+            yaml_path.write_text(self.yaml_data, encoding="utf-8")
+            call_command("load_shop_data", str(yaml_path), stdout=StringIO())
+
+        shop.refresh_from_db()
+        category.refresh_from_db()
+        product.refresh_from_db()
+        product_info = ProductInfo.objects.get(product=product, shop=shop)
+        self.assertEqual(shop.status, "active")
+        self.assertEqual(category.status, "active")
+        self.assertEqual(product.status, "active")
+        self.assertEqual(product_info.status, "active")
+
+        client = APIClient()
+        user = User.objects.create_user(
+            email="buyer@example.com",
+            password="test-password",
+            is_active=True,
+        )
+        client.force_authenticate(user=user)
+        response = client.get("/api/products/", {"page_size": 100})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 1)
 
     def test_load_shop_data_skips_goods_with_unknown_category(self) -> None:
         yaml_data = """

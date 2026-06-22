@@ -152,6 +152,8 @@
 
 - Не добавляй в модели тяжелые сценарии API.
 - Не меняй схему модели без миграции.
+- Критичные числовые инварианты склада и заказов закрепляй DB constraints,
+  а не только serializer-валидацией.
 - Если добавляешь или меняешь поле модели, проверь тесты, миграции, OpenAPI,
   serializers и документацию.
 
@@ -258,9 +260,11 @@ services -> email_service
 - `api/views.py` - тонкий HTTP-слой.
 - `api/openapi.py` - OpenAPI-схемы endpoints.
 - `api/serializers.py` - входные и выходные serializer'ы.
+- `api/permissions.py` - ролевые DRF permissions для buyer/shop/admin.
 - `api/filters.py` - фильтры каталога.
 - `api/middleware.py` - request-level логирование.
-- `api/services/` - бизнес-операции.
+- `api/services/` - бизнес-операции buyer/shop/admin, каталог, заказы,
+  контакты и загрузка прайсов.
 - `api/management/email_service.py` - email-уведомления.
 - `api/management/commands/load_shop_data.py` - CLI загрузки прайса.
 - `api/tests/` - тесты публичного поведения, сервисных инвариантов и

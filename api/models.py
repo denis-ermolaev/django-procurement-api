@@ -13,17 +13,47 @@ django_stubs_ext.monkeypatch()
 # 1. Константы ----
 STATE_CHOICES = (
     ("basket", "Статус корзины"),
-    ("new", "Новый"),
     ("confirmed", "Подтвержден"),
-    ("assembled", "Собран"),
+    ("processing", "В обработке"),
     ("sent", "Отправлен"),
     ("delivered", "Доставлен"),
+    ("partially_canceled", "Частично отменен"),
     ("canceled", "Отменен"),
+)
+
+ORDER_ITEM_STATE_CHOICES = (
+    ("basket", "В корзине"),
+    ("confirmed", "Подтверждена"),
+    ("accepted", "Принята магазином"),
+    ("assembled", "Собрана"),
+    ("sent", "Отправлена"),
+    ("delivered", "Доставлена"),
+    ("canceled", "Отменена"),
+)
+
+ARCHIVE_STATUS_CHOICES = (
+    ("active", "Активен"),
+    ("archived", "Архивирован"),
+)
+
+PRODUCT_INFO_STATUS_CHOICES = (
+    ("active", "Активно"),
+    ("hidden", "Скрыто"),
+    ("archived", "Архивировано"),
+    ("blocked", "Заблокировано"),
 )
 
 USER_TYPE_CHOICES = (
     ("shop", "Магазин"),
     ("buyer", "Покупатель"),
+    ("admin", "Администратор"),
+)
+
+SHOP_STATUS_CHOICES = (
+    ("pending", "Ожидает проверки"),
+    ("active", "Активен"),
+    ("blocked", "Заблокирован"),
+    ("archived", "Архивирован"),
 )
 
 
@@ -55,11 +85,14 @@ class UserManager(BaseUserManager):
     ):
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", True)
+        extra_fields.setdefault("type", "admin")
 
         if extra_fields.get("is_staff") is not True:
             raise ValueError("Superuser must have is_staff=True.")
         if extra_fields.get("is_superuser") is not True:
             raise ValueError("Superuser must have is_superuser=True.")
+        if extra_fields.get("type") != "admin":
+            raise ValueError("Superuser must have type='admin'.")
 
         return self._create_user(email, password, **extra_fields)
 
@@ -113,16 +146,43 @@ class User(AbstractUser):
 
 # 3. Модели api ----
 class Shop(models.Model):
+    owner = models.OneToOneField(
+        User,
+        verbose_name="Владелец",
+        related_name="shop",
+        blank=True,
+        null=True,
+        on_delete=models.SET_NULL,
+    )
     name = models.CharField(max_length=150)
     url = models.URLField(blank=True)
+    status = models.CharField(
+        verbose_name="Статус",
+        choices=SHOP_STATUS_CHOICES,
+        max_length=10,
+        default="pending",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return self.name
+
+    class Meta:
+        verbose_name = "Магазин"
+        verbose_name_plural = "Магазины"
+        ordering = ("id",)
 
 
 class Category(models.Model):
     shops = models.ManyToManyField(Shop)
     name = models.CharField(max_length=150)
+    status = models.CharField(
+        verbose_name="Статус",
+        choices=ARCHIVE_STATUS_CHOICES,
+        max_length=10,
+        default="active",
+    )
 
     def __str__(self):
         return self.name
@@ -131,6 +191,12 @@ class Category(models.Model):
 class Product(models.Model):
     category = models.ForeignKey(Category, on_delete=models.CASCADE)
     name = models.CharField(max_length=150)
+    status = models.CharField(
+        verbose_name="Статус",
+        choices=ARCHIVE_STATUS_CHOICES,
+        max_length=10,
+        default="active",
+    )
 
     def __str__(self):
         return self.name
@@ -141,11 +207,42 @@ class ProductInfo(models.Model):
     shop = models.ForeignKey(Shop, on_delete=models.CASCADE)
     name = models.CharField(max_length=150)
     quantity = models.IntegerField()
+    reserved_quantity = models.PositiveIntegerField(default=0)
     price = models.IntegerField()
     price_rrc = models.IntegerField()
+    status = models.CharField(
+        verbose_name="Статус",
+        choices=PRODUCT_INFO_STATUS_CHOICES,
+        max_length=10,
+        default="active",
+    )
 
     def __str__(self):
         return f"{self.name} ({self.shop})"
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(quantity__gte=0),
+                name="product_info_quantity_gte_0",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(reserved_quantity__gte=0),
+                name="product_info_reserved_quantity_gte_0",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(reserved_quantity__lte=models.F("quantity")),
+                name="product_info_reserved_lte_quantity",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(price__gt=0),
+                name="product_info_price_gt_0",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(price_rrc__gte=0),
+                name="product_info_price_rrc_gte_0",
+            ),
+        ]
 
 
 class Parameter(models.Model):
@@ -180,6 +277,7 @@ class Contact(models.Model):
     building = models.CharField(max_length=15, verbose_name="Строение", blank=True)
     apartment = models.CharField(max_length=15, verbose_name="Квартира", blank=True)
     phone = models.CharField(max_length=20, verbose_name="Телефон")
+    is_deleted = models.BooleanField(default=False)
 
     def __str__(self):
         return f"{self.city}, {self.street}, {self.phone}"
@@ -189,11 +287,12 @@ class Order(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     dt = models.DateTimeField(auto_now_add=True)
     state = models.CharField(
-        verbose_name="Статус", choices=STATE_CHOICES, max_length=15
+        verbose_name="Статус", choices=STATE_CHOICES, max_length=20
     )
     contact = models.ForeignKey(
         Contact, verbose_name="Контакт", blank=True, null=True, on_delete=models.CASCADE
     )
+    cancellation_reason = models.TextField(blank=True)
 
     def __str__(self):
         return f"Order #{self.pk} ({self.state})"
@@ -209,6 +308,20 @@ class OrderItem(models.Model):
         on_delete=models.CASCADE,
     )
     quantity = models.IntegerField()
+    state = models.CharField(
+        verbose_name="Статус позиции",
+        choices=ORDER_ITEM_STATE_CHOICES,
+        max_length=15,
+        default="basket",
+    )
 
     def __str__(self):
         return f"{self.product_info} x {self.quantity}"
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(quantity__gte=1),
+                name="order_item_quantity_gte_1",
+            ),
+        ]

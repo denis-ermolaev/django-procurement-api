@@ -29,7 +29,13 @@ def get_filtered_products(user: User, query_params: Any) -> QuerySet[Product]:
             {"parameter": ["Ожидаемый формат: имя_параметра:значение."]}
         )
 
-    filter_set = ProductFilter(query_params, queryset=Product.objects.order_by("id"))
+    base_queryset = Product.objects.filter(
+        status="active",
+        category__status="active",
+        productinfo__status="active",
+        productinfo__shop__status="active",
+    ).order_by("id")
+    filter_set = ProductFilter(query_params, queryset=base_queryset)
     if not filter_set.is_valid():
         logger.warning(
             "product_list_invalid_filters user_id=%s errors=%s",
@@ -38,7 +44,7 @@ def get_filtered_products(user: User, query_params: Any) -> QuerySet[Product]:
         )
         raise ValidationError(filter_set.errors)
 
-    return filter_set.qs
+    return filter_set.qs.distinct()
 
 
 def log_product_page_loaded(user: User, *, total_count: int, page_size: int) -> None:
@@ -51,7 +57,14 @@ def log_product_page_loaded(user: User, *, total_count: int, page_size: int) -> 
 
 
 def get_product_info(pk: int) -> ProductInfo:
-    product_info = get_object_or_404(ProductInfo, pk=pk)
+    product_info = get_object_or_404(
+        ProductInfo,
+        pk=pk,
+        status="active",
+        shop__status="active",
+        product__status="active",
+        product__category__status="active",
+    )
     logger.debug(
         "product_detail_loaded product_info_id=%s product_id=%s shop_id=%s",
         product_info.pk,

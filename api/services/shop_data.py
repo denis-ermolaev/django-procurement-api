@@ -67,9 +67,10 @@ def read_shop_yaml(file_path: str) -> dict[str, Any]:
 def load_shop(data: dict[str, Any]) -> Shop:
     shop_name = data["shop"]
     shop_url = data.get("url", "")
+    shop_status = data.get("status", "active")
     shop, created = Shop.objects.get_or_create(
         name=shop_name,
-        defaults={"url": shop_url},
+        defaults={"url": shop_url, "status": shop_status},
     )
     logger.info(
         "shop_data_shop_%s shop_id=%s shop_name=%s",
@@ -77,10 +78,21 @@ def load_shop(data: dict[str, Any]) -> Shop:
         shop.pk,
         shop.name,
     )
+    changed_fields: list[str] = []
     if not created and shop_url and shop.url != shop_url:
         shop.url = shop_url
-        shop.save(update_fields=["url"])
-        logger.info("shop_data_shop_url_updated shop_id=%s", shop.pk)
+        changed_fields.append("url")
+    if not created and shop.owner is None and shop.status != shop_status:
+        shop.status = shop_status
+        changed_fields.append("status")
+    if changed_fields:
+        changed_fields.append("updated_at")
+        shop.save(update_fields=changed_fields)
+        logger.info(
+            "shop_data_shop_updated shop_id=%s changed_fields=%s",
+            shop.pk,
+            changed_fields,
+        )
     return shop
 
 
@@ -90,7 +102,13 @@ def load_categories(
     cat_by_id = {}
     for cat_data in categories:
         cat_id = cat_data["id"]
-        category, created = Category.objects.get_or_create(name=cat_data["name"])
+        category_status = cat_data.get("status", "active")
+        category, created = Category.objects.get_or_create(
+            name=cat_data["name"], defaults={"status": category_status}
+        )
+        if not created and category.status != category_status:
+            category.status = category_status
+            category.save(update_fields=["status"])
         category.shops.add(shop)
         cat_by_id[cat_id] = category
         logger.debug(
@@ -130,7 +148,11 @@ def load_goods(
             continue
 
         product, product_created = Product.objects.update_or_create(
-            name=good["name"], defaults={"category": category}
+            name=good["name"],
+            defaults={
+                "category": category,
+                "status": good.get("product_status", "active"),
+            },
         )
         if product_created:
             result.created_products += 1
@@ -145,6 +167,7 @@ def load_goods(
                 "quantity": good["quantity"],
                 "price": good["price"],
                 "price_rrc": good["price_rrc"],
+                "status": good.get("status", "active"),
             },
         )
         if offer_created:

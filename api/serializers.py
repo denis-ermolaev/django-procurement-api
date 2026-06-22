@@ -1,14 +1,43 @@
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 from djoser.serializers import UserCreateSerializer as BaseUserCreateSerializer
 from djoser.serializers import UserSerializer as BaseUserSerializer
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
-from .models import STATE_CHOICES, Contact, Order, OrderItem, Product, ProductInfo, User
+from .models import (
+    ORDER_ITEM_STATE_CHOICES,
+    PRODUCT_INFO_STATUS_CHOICES,
+    STATE_CHOICES,
+    Category,
+    Contact,
+    Order,
+    OrderItem,
+    Parameter,
+    Product,
+    ProductInfo,
+    Shop,
+    User,
+)
 
 # 1. Константы сериализаторов ----
 ORDER_UPDATE_STATE_CHOICES = tuple(
     (state, label) for state, label in STATE_CHOICES if state != "basket"
+)
+BUYER_ORDER_UPDATE_STATE_CHOICES = (("canceled", "Отменен"),)
+SHOP_OFFER_STATUS_CHOICES = tuple(
+    (state, label)
+    for state, label in PRODUCT_INFO_STATUS_CHOICES
+    if state in {"active", "hidden", "archived"}
+)
+SHOP_ORDER_ITEM_STATE_CHOICES = tuple(
+    (state, label)
+    for state, label in ORDER_ITEM_STATE_CHOICES
+    if state in {"accepted", "assembled", "sent", "delivered", "canceled"}
+)
+ADMIN_ORDER_ITEM_STATE_CHOICES = tuple(
+    (state, label) for state, label in ORDER_ITEM_STATE_CHOICES if state != "basket"
 )
 
 
@@ -25,15 +54,27 @@ class UserCreateSerializer(BaseUserCreateSerializer):
         )
         extra_kwargs = {
             "type": {
-                "required": False,
-                "default": "buyer",
-                "help_text": "Тип пользователя. По умолчанию создается покупатель.",
+                "read_only": True,
+                "help_text": "Тип пользователя. Обычная регистрация всегда создает покупателя.",
             },
             "password": {
                 "write_only": True,
                 "help_text": "Пароль пользователя. В ответах API не возвращается.",
             },
         }
+
+    def validate(self, attrs):
+        requested_type = self.initial_data.get("type")
+        if requested_type not in (None, "", "buyer"):
+            raise serializers.ValidationError(
+                {
+                    "type": (
+                        "Через обычную регистрацию можно создать только покупателя. "
+                        "Для магазина используйте /api/shops/register/."
+                    )
+                }
+            )
+        return super().validate(attrs)
 
 
 class UserSerializer(BaseUserSerializer):
@@ -51,7 +92,112 @@ class UserSerializer(BaseUserSerializer):
         )
 
 
-# 3. Сериализаторы каталога ----
+# 3. Сериализаторы магазинов ----
+class RegisteredShopUserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ("id", "email", "first_name", "last_name", "type", "is_active")
+        extra_kwargs = {
+            "id": {"read_only": True, "help_text": "ID пользователя магазина."},
+            "email": {"read_only": True, "help_text": "Email пользователя магазина."},
+            "first_name": {"read_only": True},
+            "last_name": {"read_only": True},
+            "type": {"read_only": True, "help_text": "Тип пользователя: shop."},
+            "is_active": {
+                "read_only": True,
+                "help_text": "Активирован ли пользователь для получения JWT.",
+            },
+        }
+
+
+class ShopSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Shop
+        fields = (
+            "id",
+            "name",
+            "url",
+            "owner",
+            "status",
+            "created_at",
+            "updated_at",
+        )
+        extra_kwargs = {
+            "id": {"read_only": True, "help_text": "ID магазина."},
+            "name": {"help_text": "Название магазина."},
+            "url": {"help_text": "URL магазина. Может быть пустой строкой."},
+            "owner": {"read_only": True, "help_text": "ID пользователя-владельца."},
+            "status": {"read_only": True, "help_text": "Статус модерации магазина."},
+            "created_at": {
+                "read_only": True,
+                "help_text": "Дата и время создания магазина.",
+            },
+            "updated_at": {
+                "read_only": True,
+                "help_text": "Дата и время последнего обновления магазина.",
+            },
+        }
+
+
+class ShopRegistrationSerializer(serializers.Serializer):
+    first_name = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=150,
+        help_text="Имя пользователя магазина.",
+    )
+    last_name = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=150,
+        help_text="Фамилия пользователя магазина.",
+    )
+    email = serializers.EmailField(help_text="Email пользователя магазина.")
+    password = serializers.CharField(
+        write_only=True,
+        trim_whitespace=False,
+        help_text="Пароль пользователя магазина. В ответе не возвращается.",
+    )
+    shop_name = serializers.CharField(max_length=150, help_text="Название магазина.")
+    url = serializers.URLField(
+        required=False,
+        allow_blank=True,
+        help_text="URL магазина. Может быть пустой строкой.",
+    )
+
+    def validate_email(self, value: str) -> str:
+        email = User.objects.normalize_email(value)
+        if User.objects.filter(email=email).exists():
+            raise serializers.ValidationError(
+                "Пользователь с таким email уже существует."
+            )
+        return email
+
+    def validate_password(self, value: str) -> str:
+        try:
+            validate_password(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(list(exc.messages)) from exc
+        return value
+
+
+class ShopRegistrationResponseSerializer(serializers.Serializer):
+    user = RegisteredShopUserSerializer(read_only=True)
+    shop = ShopSerializer(read_only=True)
+
+
+# 4. Сериализаторы каталога ----
+class CategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Category
+        fields = ("id", "name", "status")
+        extra_kwargs = {
+            "id": {"read_only": True, "help_text": "ID категории."},
+            "name": {"help_text": "Название категории."},
+            "status": {"help_text": "Статус категории."},
+        }
+
+
 class ProductSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
@@ -59,18 +205,33 @@ class ProductSerializer(serializers.ModelSerializer):
             "id",
             "category",
             "name",
+            "status",
         )
         extra_kwargs = {
             "id": {"read_only": True, "help_text": "ID товара."},
             "category": {"help_text": "ID категории товара."},
             "name": {"help_text": "Название товара в каталоге."},
+            "status": {"help_text": "Статус товара."},
         }
 
 
 class ProductInfoSerializer(serializers.ModelSerializer):
+    available_quantity = serializers.SerializerMethodField(
+        help_text="Доступный к продаже остаток с учетом резерва."
+    )
+
     class Meta:
         model = ProductInfo
-        fields = "__all__"
+        fields = (
+            "id",
+            "product",
+            "shop",
+            "name",
+            "quantity",
+            "available_quantity",
+            "price",
+            "price_rrc",
+        )
         extra_kwargs = {
             "id": {"read_only": True, "help_text": "ID конкретного предложения."},
             "product": {"help_text": "ID товара Product из общего каталога."},
@@ -83,17 +244,162 @@ class ProductInfoSerializer(serializers.ModelSerializer):
             "price_rrc": {"help_text": "Рекомендованная розничная цена."},
         }
 
+    @extend_schema_field(OpenApiTypes.INT)
+    def get_available_quantity(self, obj: ProductInfo) -> int:
+        return max(obj.quantity - obj.reserved_quantity, 0)
 
-# 4. Сериализаторы заказов ----
+
+class OfferSerializer(serializers.ModelSerializer):
+    available_quantity = serializers.SerializerMethodField(
+        help_text="Доступный остаток: quantity - reserved_quantity."
+    )
+
+    class Meta:
+        model = ProductInfo
+        fields = (
+            "id",
+            "product",
+            "shop",
+            "name",
+            "quantity",
+            "reserved_quantity",
+            "available_quantity",
+            "price",
+            "price_rrc",
+            "status",
+        )
+        extra_kwargs = {
+            "id": {"read_only": True},
+            "shop": {"read_only": True},
+            "reserved_quantity": {"read_only": True},
+            "status": {"help_text": "Статус предложения магазина."},
+        }
+
+    @extend_schema_field(OpenApiTypes.INT)
+    def get_available_quantity(self, obj: ProductInfo) -> int:
+        return max(obj.quantity - obj.reserved_quantity, 0)
+
+
+class ShopOfferCreateSerializer(serializers.ModelSerializer):
+    quantity = serializers.IntegerField(
+        min_value=0,
+        error_messages={"min_value": "Остаток не может быть отрицательным."},
+    )
+    price = serializers.IntegerField(
+        min_value=1,
+        error_messages={"min_value": "Цена должна быть больше 0."},
+    )
+    price_rrc = serializers.IntegerField(
+        min_value=0,
+        error_messages={
+            "min_value": "Рекомендованная цена не может быть отрицательной."
+        },
+    )
+
+    class Meta:
+        model = ProductInfo
+        fields = ("product", "name", "quantity", "price", "price_rrc", "status")
+        extra_kwargs = {
+            "status": {
+                "required": False,
+                "help_text": "Статус предложения. По умолчанию active.",
+            },
+        }
+
+    def validate_status(self, value: str) -> str:
+        allowed_statuses = {status for status, _ in SHOP_OFFER_STATUS_CHOICES}
+        if value not in allowed_statuses:
+            raise serializers.ValidationError(
+                "Магазин может использовать только active, hidden или archived."
+            )
+        return value
+
+    def validate(self, attrs):
+        if attrs["price"] <= 0:
+            raise serializers.ValidationError({"price": "Цена должна быть больше 0."})
+        if attrs.get("price_rrc", 0) < 0:
+            raise serializers.ValidationError(
+                {"price_rrc": "Рекомендованная цена не может быть отрицательной."}
+            )
+        if attrs["quantity"] < 0:
+            raise serializers.ValidationError(
+                {"quantity": "Остаток не может быть отрицательным."}
+            )
+        return attrs
+
+
+class ShopOfferUpdateSerializer(serializers.ModelSerializer):
+    quantity = serializers.IntegerField(
+        min_value=0,
+        required=False,
+        error_messages={"min_value": "Остаток не может быть отрицательным."},
+    )
+    price = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        error_messages={"min_value": "Цена должна быть больше 0."},
+    )
+    price_rrc = serializers.IntegerField(
+        min_value=0,
+        required=False,
+        error_messages={
+            "min_value": "Рекомендованная цена не может быть отрицательной."
+        },
+    )
+    status = serializers.ChoiceField(
+        choices=SHOP_OFFER_STATUS_CHOICES,
+        required=False,
+        help_text="Статус предложения: active, hidden или archived.",
+    )
+
+    class Meta:
+        model = ProductInfo
+        fields = ("name", "quantity", "price", "price_rrc", "status")
+        extra_kwargs = {
+            "name": {"required": False},
+            "quantity": {"required": False},
+            "price": {"required": False},
+            "price_rrc": {"required": False},
+        }
+
+    def validate(self, attrs):
+        if "price" in attrs and attrs["price"] <= 0:
+            raise serializers.ValidationError({"price": "Цена должна быть больше 0."})
+        if "price_rrc" in attrs and attrs["price_rrc"] < 0:
+            raise serializers.ValidationError(
+                {"price_rrc": "Рекомендованная цена не может быть отрицательной."}
+            )
+        if "quantity" in attrs and attrs["quantity"] < 0:
+            raise serializers.ValidationError(
+                {"quantity": "Остаток не может быть отрицательным."}
+            )
+        return attrs
+
+
+class ParameterSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Parameter
+        fields = ("id", "name")
+        extra_kwargs = {
+            "id": {"read_only": True},
+            "name": {"help_text": "Название характеристики."},
+        }
+
+
+# 5. Сериализаторы заказов ----
 class OrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
-        fields = ("id", "user", "dt", "state")
+        fields = ("id", "user", "dt", "state", "cancellation_reason")
         extra_kwargs = {
             "id": {"read_only": True, "help_text": "ID заказа."},
             "user": {"read_only": True, "help_text": "ID владельца заказа."},
             "dt": {"read_only": True, "help_text": "Дата и время создания заказа."},
             "state": {"help_text": "Текущий статус заказа."},
+            "cancellation_reason": {
+                "read_only": True,
+                "help_text": "Административная причина отмены заказа.",
+            },
         }
 
 
@@ -108,6 +414,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "quantity": {
                 "help_text": "Количество единиц этого предложения внутри заказа."
             },
+            "state": {"help_text": "Статус позиции заказа."},
         }
 
 
@@ -129,7 +436,16 @@ class OrderDetailSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Order
-        fields = ("id", "user", "dt", "state", "contact", "total_sum", "items")
+        fields = (
+            "id",
+            "user",
+            "dt",
+            "state",
+            "contact",
+            "cancellation_reason",
+            "total_sum",
+            "items",
+        )
         extra_kwargs = {
             "id": {"read_only": True, "help_text": "ID заказа."},
             "user": {"read_only": True, "help_text": "ID владельца заказа."},
@@ -145,7 +461,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
         return total
 
 
-# 5. Сериализаторы контактов ----
+# 6. Сериализаторы контактов ----
 class ContactSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(read_only=True, help_text="ID адреса доставки.")
 
@@ -172,7 +488,7 @@ class ContactSerializer(serializers.ModelSerializer):
         }
 
 
-# 6. Сериализаторы входных команд ----
+# 7. Сериализаторы входных команд ----
 class AddToBasketSerializer(serializers.Serializer):
     product_info_id = serializers.IntegerField(
         min_value=1,
@@ -237,11 +553,8 @@ class OrderHistorySerializer(serializers.ModelSerializer):
 
 class OrderUpdateSerializer(serializers.ModelSerializer):
     state = serializers.ChoiceField(
-        choices=ORDER_UPDATE_STATE_CHOICES,
-        help_text=(
-            "Новый статус заказа. Разрешены new, confirmed, assembled, sent, "
-            "delivered и canceled; статус basket нельзя выставить через этот endpoint."
-        ),
+        choices=BUYER_ORDER_UPDATE_STATE_CHOICES,
+        help_text="Покупатель может только отменить заказ до начала обработки.",
     )
 
     class Meta:
@@ -249,7 +562,128 @@ class OrderUpdateSerializer(serializers.ModelSerializer):
         fields = ["state"]
 
 
-# 7. Сериализаторы ответов ----
+class AdminOrderUpdateSerializer(serializers.ModelSerializer):
+    state = serializers.ChoiceField(
+        choices=ORDER_UPDATE_STATE_CHOICES,
+        required=False,
+        help_text="Новый административный статус заказа. Статус basket запрещен.",
+    )
+    cancellation_reason = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        help_text="Обязательная причина при административной отмене заказа.",
+    )
+
+    class Meta:
+        model = Order
+        fields = ("state", "cancellation_reason")
+
+    def validate(self, attrs):
+        if attrs.get("state") == "canceled" and not attrs.get("cancellation_reason"):
+            raise serializers.ValidationError(
+                {"cancellation_reason": "Укажите причину отмены заказа."}
+            )
+        return attrs
+
+
+class ShopOrderItemUpdateSerializer(serializers.ModelSerializer):
+    state = serializers.ChoiceField(
+        choices=SHOP_ORDER_ITEM_STATE_CHOICES,
+        help_text="Новый статус позиции заказа.",
+    )
+
+    class Meta:
+        model = OrderItem
+        fields = ["state"]
+
+
+class AdminOrderItemUpdateSerializer(serializers.ModelSerializer):
+    state = serializers.ChoiceField(
+        choices=ADMIN_ORDER_ITEM_STATE_CHOICES,
+        help_text="Новый административный статус позиции заказа.",
+    )
+
+    class Meta:
+        model = OrderItem
+        fields = ["state"]
+
+
+class AdminUserUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ("is_active", "type", "is_staff")
+        extra_kwargs = {
+            "is_active": {"required": False},
+            "type": {"required": False},
+            "is_staff": {"required": False},
+        }
+
+    def validate(self, attrs):
+        user_type = attrs.get("type", getattr(self.instance, "type", None))
+        is_staff = attrs.get("is_staff", getattr(self.instance, "is_staff", False))
+        if user_type == "admin" and not is_staff:
+            raise serializers.ValidationError(
+                {"is_staff": "Пользователь с ролью admin должен иметь is_staff=True."}
+            )
+        return attrs
+
+
+class AdminShopUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Shop
+        fields = ("name", "url", "status")
+        extra_kwargs = {
+            "name": {"required": False},
+            "url": {"required": False},
+            "status": {"required": False},
+        }
+
+
+class AdminOfferUpdateSerializer(serializers.ModelSerializer):
+    quantity = serializers.IntegerField(
+        min_value=0,
+        required=False,
+        error_messages={"min_value": "Остаток не может быть отрицательным."},
+    )
+    price = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        error_messages={"min_value": "Цена должна быть больше 0."},
+    )
+    price_rrc = serializers.IntegerField(
+        min_value=0,
+        required=False,
+        error_messages={
+            "min_value": "Рекомендованная цена не может быть отрицательной."
+        },
+    )
+
+    class Meta:
+        model = ProductInfo
+        fields = ("name", "quantity", "price", "price_rrc", "status")
+        extra_kwargs = {
+            "name": {"required": False},
+            "quantity": {"required": False},
+            "price": {"required": False},
+            "price_rrc": {"required": False},
+            "status": {"required": False},
+        }
+
+    def validate(self, attrs):
+        if "price" in attrs and attrs["price"] <= 0:
+            raise serializers.ValidationError({"price": "Цена должна быть больше 0."})
+        if "price_rrc" in attrs and attrs["price_rrc"] < 0:
+            raise serializers.ValidationError(
+                {"price_rrc": "Рекомендованная цена не может быть отрицательной."}
+            )
+        if "quantity" in attrs and attrs["quantity"] < 0:
+            raise serializers.ValidationError(
+                {"quantity": "Остаток не может быть отрицательным."}
+            )
+        return attrs
+
+
+# 8. Сериализаторы ответов ----
 class PaginatedProductResponseSerializer(serializers.Serializer):
     count = serializers.IntegerField(
         read_only=True, help_text="Общее количество товаров."

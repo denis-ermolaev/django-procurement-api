@@ -35,8 +35,12 @@ class OrderAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         order.refresh_from_db()
+        order_item = OrderItem.objects.get(order=order)
+        self.product_info.refresh_from_db()
         self.assertEqual(order.state, "confirmed")
         self.assertEqual(order.contact, contact)
+        self.assertEqual(order_item.state, "confirmed")
+        self.assertEqual(self.product_info.reserved_quantity, 2)
         send_confirmation.assert_called_once_with(order)
 
     def test_confirm_order_rejects_another_users_order_or_contact(self) -> None:
@@ -123,7 +127,10 @@ class OrderAPITests(APITestCase):
     def test_order_patch_validates_state_and_checks_ownership(self) -> None:
         own_order = Order.objects.create(user=self.user, state="confirmed")
         own_item = OrderItem.objects.create(
-            order=own_order, product_info=self.product_info, quantity=1
+            order=own_order,
+            product_info=self.product_info,
+            quantity=1,
+            state="confirmed",
         )
         other_order = Order.objects.create(user=self.other_user, state="confirmed")
         self.authenticate()
@@ -140,12 +147,12 @@ class OrderAPITests(APITestCase):
         )
         forbidden_response = self.api_client.patch(
             reverse("order-detail", args=[other_order.pk]),
-            {"state": "new"},
+            {"state": "canceled"},
             format="json",
         )
         response = self.api_client.patch(
             reverse("order-detail", args=[own_order.pk]),
-            {"state": "delivered"},
+            {"state": "canceled"},
             format="json",
         )
 
@@ -155,7 +162,43 @@ class OrderAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["items"][0]["id"], own_item.pk)
         own_order.refresh_from_db()
-        self.assertEqual(own_order.state, "delivered")
+        own_item.refresh_from_db()
+        self.assertEqual(own_order.state, "canceled")
+        self.assertEqual(own_item.state, "canceled")
+
+    def test_buyer_can_cancel_partially_canceled_order_before_processing(self) -> None:
+        order = Order.objects.create(user=self.user, state="partially_canceled")
+        canceled_item = OrderItem.objects.create(
+            order=order,
+            product_info=self.other_product_info,
+            quantity=1,
+            state="canceled",
+        )
+        confirmed_item = OrderItem.objects.create(
+            order=order,
+            product_info=self.product_info,
+            quantity=2,
+            state="confirmed",
+        )
+        self.product_info.reserved_quantity = 2
+        self.product_info.save(update_fields=["reserved_quantity"])
+        self.authenticate()
+
+        response = self.api_client.patch(
+            reverse("order-detail", args=[order.pk]),
+            {"state": "canceled"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        order.refresh_from_db()
+        canceled_item.refresh_from_db()
+        confirmed_item.refresh_from_db()
+        self.product_info.refresh_from_db()
+        self.assertEqual(order.state, "canceled")
+        self.assertEqual(canceled_item.state, "canceled")
+        self.assertEqual(confirmed_item.state, "canceled")
+        self.assertEqual(self.product_info.reserved_quantity, 0)
 
     @override_settings(
         EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
