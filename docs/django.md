@@ -23,9 +23,11 @@ python manage.py startapp api
 
 - `api/models.py` - пользователь, каталог, контакты, заказы и позиции заказов.
 - `api/serializers.py` - сериализация входных команд и ответов API.
-- `api/views.py` - DRF APIView эндпоинты.
+- `api/views.py` - тонкий HTTP-слой DRF APIView: валидация входных serializer'ов, вызов сервисов и сериализация ответа.
+- `api/openapi.py` - OpenAPI-декораторы, примеры, общие ответы и параметры endpoints.
+- `api/services/` - бизнес-операции каталога, корзины, контактов, заказов и загрузки прайсов.
 - `api/filters.py` - фильтры каталога.
-- `api/management/commands/load_shop_data.py` - загрузка YAML-прайса.
+- `api/management/commands/load_shop_data.py` - тонкая CLI-обертка над сервисом загрузки YAML-прайса.
 - `api/tests/` - тесты публичного поведения API и management command.
 
 # 3. Рабочие команды ----
@@ -107,10 +109,13 @@ docker compose logs -f web
 
 `api.middleware.RequestLogMiddleware` пишет итог обработки HTTP-запроса в logger `api.request`: метод, путь, статус, длительность и `user_id`, если он известен. Тело запроса, query string, JWT, cookies, телефоны и адреса не логируются.
 
-Бизнес-логи пишутся через `logging.getLogger(__name__)` внутри функций приложения:
+Бизнес-логи пишутся через `logging.getLogger(__name__)` внутри функций сервисного слоя:
 
-- `api.views` - ключевые ветки API: каталог, корзина, контакты, заказы.
-- `api.management.commands.load_shop_data` - загрузка YAML-прайсов и итоговая статистика.
+- `api.services.products` - каталог и предложения.
+- `api.services.basket` - выбор корзины, добавление и удаление позиций.
+- `api.services.contacts` - список, создание и удаление адресов.
+- `api.services.orders` - подтверждение, история и статусы заказов.
+- `api.services.shop_data` - загрузка YAML-прайсов и итоговая статистика.
 - `api.management.email_service` - отправка email-уведомлений по заказам.
 
 Для разработки включайте `DJANGO_LOG_LEVEL=DEBUG`, чтобы видеть не только изменения состояния, но и диагностические события: старт функции, выбранные ID, количество объектов и причины бизнес-отказов.
@@ -162,7 +167,7 @@ Authorization: Bearer <access-token>
 
 ## 4.6. Документация API ----
 
-OpenAPI-описания находятся рядом с view-классами в `api/views.py`, а help text для полей - в `api/serializers.py`. После изменения публичного API обязательно запускайте:
+OpenAPI-описания находятся в `api/openapi.py`, а help text для полей - в `api/serializers.py`. После изменения публичного API обязательно запускайте:
 
 ```bash
 make schema_validate_host

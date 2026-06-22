@@ -26,7 +26,7 @@ class OrderAPITests(APITestCase):
         )
         self.authenticate()
 
-        with patch("api.views.send_order_confirmation") as send_confirmation:
+        with patch("api.services.orders.send_order_confirmation") as send_confirmation:
             response = self.api_client.post(
                 reverse("order-confirm"),
                 {"order_id": order.pk, "contact_id": contact.pk},

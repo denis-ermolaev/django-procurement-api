@@ -46,7 +46,7 @@ class RequestLoggingAPITests(APITestCase):
     def test_basket_add_records_business_logs(self) -> None:
         self.authenticate()
 
-        with self.assertLogs("api.views", level="INFO") as captured:
+        with self.assertLogs("api.services.basket", level="INFO") as captured:
             response = self.api_client.post(
                 reverse("basket"),
                 {"product_info_id": self.product_info.pk, "quantity": 2},
@@ -105,9 +105,7 @@ goods:
             yaml_path = Path(tmp_dir) / "shop.yaml"
             yaml_path.write_text(yaml_data, encoding="utf-8")
 
-            with self.assertLogs(
-                "api.management.commands.load_shop_data", level="INFO"
-            ) as captured:
+            with self.assertLogs("api.services.shop_data", level="INFO") as captured:
                 call_command("load_shop_data", str(yaml_path), stdout=StringIO())
 
         self.assertTrue(
