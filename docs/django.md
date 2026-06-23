@@ -1,6 +1,7 @@
 # 1. Django notes ----
 
-Краткая техническая памятка по проекту. Основные пользовательские инструкции находятся в [README.md](../README.md), подробные примеры API - в [api.md](api.md).
+Краткая техническая памятка по проекту. Карта документации находится в
+[docs.md](docs.md), подробные примеры API - в [api.md](api.md).
 
 ## 1.1. Создание проекта ----
 
@@ -35,7 +36,7 @@ python manage.py startapp api
 ## 3.1. Проверка соединения с БД ----
 
 ```bash
-python manage.py check --database default
+make django_check
 ```
 
 ## 3.2. Миграции ----
@@ -61,13 +62,13 @@ python manage.py createsuperuser
 ## 3.4. Локальные тесты ----
 
 ```bash
-python manage.py test --settings=core.test_settings
+make test
 ```
 
 Для полной локальной проверки перед сдачей:
 
 ```bash
-make check_host
+make check
 ```
 
 ## 3.5. Отчет покрытия ----
@@ -83,10 +84,11 @@ coverage html
 ## 3.6. Проверка OpenAPI ----
 
 ```bash
-python manage.py spectacular --settings=core.test_settings --validate --fail-on-warn --file /tmp/procurement-openapi.yaml
+make schema_validate
 ```
 
-В Makefile это собрано в цель `make schema_validate_host`. Проверка полезна перед сдачей, потому что ловит рассинхронизацию Swagger-схемы и сериализаторов.
+Проверка полезна перед сдачей, потому что ловит рассинхронизацию Swagger-схемы
+и сериализаторов.
 
 ## 3.7. Загрузка демо-магазинов ----
 
@@ -100,11 +102,14 @@ python manage.py load_shop_data data/shop2.yaml
 ## 3.8. Логгинг ----
 
 Конфигурация логирования находится в `core/settings.py` в переменной `LOGGING`.
+По умолчанию логгинг выключен: разработчик включает только нужные модули через
+`.env`.
 
-Основной вывод идет в console handler, поэтому при Docker-запуске логи смотрятся через:
+Основной вывод идет в console handler, поэтому при Docker-запуске логи смотрятся
+через:
 
 ```bash
-docker compose logs -f web
+make logs_web
 ```
 
 `api.middleware.RequestLogMiddleware` пишет итог обработки HTTP-запроса в logger `api.request`: метод, путь, статус, длительность и `user_id`, если он известен. Тело запроса, query string, JWT, cookies, телефоны и адреса не логируются.
@@ -118,12 +123,24 @@ docker compose logs -f web
 - `api.services.shop_data` - загрузка YAML-прайсов и итоговая статистика.
 - `api.management.email_service` - отправка email-уведомлений по заказам.
 
-Для разработки включайте `DJANGO_LOG_LEVEL=DEBUG`, чтобы видеть не только изменения состояния, но и диагностические события: старт функции, выбранные ID, количество объектов и причины бизнес-отказов.
+Для разработки включайте конкретные модули:
+
+```env
+DJANGO_LOGGING_ENABLED=True
+DJANGO_LOG_LEVEL=DEBUG
+DJANGO_LOG_MODULES=api.services.orders,api.request
+DJANGO_LOG_SQL=False
+```
 
 Настройки окружения:
 
+- `DJANGO_LOGGING_ENABLED` - главный переключатель логирования.
 - `DJANGO_LOG_LEVEL` - общий уровень логирования.
+- `DJANGO_LOG_MODULES` - список logger names через запятую.
 - `DJANGO_LOG_SQL` - включает SQL-логи `django.db.backends`.
+
+Сообщения бизнес-логов должны начинаться с имени функции в квадратных скобках,
+например `[confirm_order] order_confirmed ...`.
 
 # 4. API conventions ----
 

@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase
+from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -22,6 +23,7 @@ categories:
 goods:
   - id: 100
     category: 1
+    model: test/phone
     name: Test Phone
     price: 100
     price_rrc: 120
@@ -46,8 +48,33 @@ goods:
         self.assertEqual(ProductParameter.objects.count(), 2)
         product_info = ProductInfo.objects.get()
         self.assertEqual(product_info.quantity, 5)
+        self.assertEqual(product_info.external_id, "100")
+        self.assertEqual(product_info.model, "test/phone")
         self.assertEqual(product_info.shop.url, "https://shop.example.com")
         self.assertEqual(product_info.shop.status, "active")
+
+    def test_load_shop_data_updates_offer_by_external_id_after_rename(self) -> None:
+        renamed_yaml = self.yaml_data.replace("Test Phone", "Renamed Phone").replace(
+            "price: 100",
+            "price: 150",
+        )
+
+        with TemporaryDirectory() as tmp_dir:
+            yaml_path = Path(tmp_dir) / "shop.yaml"
+            yaml_path.write_text(self.yaml_data, encoding="utf-8")
+            call_command("load_shop_data", str(yaml_path), stdout=StringIO())
+
+            yaml_path.write_text(renamed_yaml, encoding="utf-8")
+            call_command("load_shop_data", str(yaml_path), stdout=StringIO())
+
+        self.assertEqual(Product.objects.count(), 1)
+        self.assertEqual(ProductInfo.objects.count(), 1)
+        product = Product.objects.get()
+        product_info = ProductInfo.objects.get()
+        self.assertEqual(product.name, "Renamed Phone")
+        self.assertEqual(product_info.name, "Renamed Phone")
+        self.assertEqual(product_info.external_id, "100")
+        self.assertEqual(product_info.price, 150)
 
     def test_repository_shop_fixtures_load_two_shops_without_duplicates(self) -> None:
         shop1_path = self.data_dir / "shop1.yaml"
@@ -188,3 +215,49 @@ goods:
 
         self.assertEqual(Product.objects.count(), 0)
         self.assertIn("Category id 999 not found", stderr.getvalue())
+
+    def test_shop_import_api_updates_offers_atomically(self) -> None:
+        shop_user = User.objects.create_user(
+            email="shop-import@example.com",
+            password="test-password",
+            type="shop",
+            is_active=True,
+        )
+        Shop.objects.create(owner=shop_user, name="Test shop", status="active")
+        client = APIClient()
+        client.force_authenticate(user=shop_user)
+
+        response = client.post(
+            reverse("shop-imports"),
+            {"content": self.yaml_data},
+            format="json",
+        )
+        bad_response = client.post(
+            reverse("shop-imports"),
+            {"content": self.yaml_data.replace("price: 100", "price: 0")},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["loaded_count"], 1)
+        self.assertEqual(response.data["created_offers"], 1)
+        self.assertEqual(bad_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(ProductInfo.objects.count(), 1)
+        self.assertEqual(ProductInfo.objects.get().external_id, "100")
+
+    def test_shop_import_api_requires_shop_role(self) -> None:
+        buyer = User.objects.create_user(
+            email="buyer-import@example.com",
+            password="test-password",
+            is_active=True,
+        )
+        client = APIClient()
+        client.force_authenticate(user=buyer)
+
+        response = client.post(
+            reverse("shop-imports"),
+            {"content": self.yaml_data},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

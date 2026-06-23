@@ -6,7 +6,7 @@ from django.urls import reverse
 from rest_framework import status
 
 from api.management.email_service import send_order_confirmation
-from api.models import Contact, Order, OrderItem
+from api.models import Contact, Order, OrderItem, User
 from api.tests.base import APITestCase
 
 
@@ -26,7 +26,10 @@ class OrderAPITests(APITestCase):
         )
         self.authenticate()
 
-        with patch("api.services.orders.send_order_confirmation") as send_confirmation:
+        with (
+            patch("api.services.orders.send_order_confirmation") as send_confirmation,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
             response = self.api_client.post(
                 reverse("order-confirm"),
                 {"order_id": order.pk, "contact_id": contact.pk},
@@ -39,9 +42,46 @@ class OrderAPITests(APITestCase):
         self.product_info.refresh_from_db()
         self.assertEqual(order.state, "confirmed")
         self.assertEqual(order.contact, contact)
+        self.assertIsNotNone(order.confirmed_at)
         self.assertEqual(order_item.state, "confirmed")
+        self.assertEqual(order_item.unit_price, 100)
+        self.assertEqual(order_item.price_rrc_snapshot, 120)
+        self.assertEqual(order_item.product_name_snapshot, self.product.name)
+        self.assertEqual(order_item.offer_name_snapshot, self.product_info.name)
+        self.assertEqual(order_item.shop_name_snapshot, self.shop.name)
         self.assertEqual(self.product_info.reserved_quantity, 2)
-        send_confirmation.assert_called_once_with(order)
+        self.assertEqual(response.data["id"], order.pk)
+        self.assertEqual(response.data["total_sum"], 200)
+        send_confirmation.assert_called_once()
+        self.assertEqual(send_confirmation.call_args.args[0].pk, order.pk)
+
+    def test_confirm_order_keeps_price_snapshot_after_offer_price_change(self) -> None:
+        contact = Contact.objects.create(user=self.user, **self.contact_payload)
+        order = Order.objects.create(user=self.user, state="basket")
+        OrderItem.objects.create(
+            order=order, product_info=self.product_info, quantity=2
+        )
+        self.authenticate()
+
+        with (
+            patch("api.services.orders.send_order_confirmation"),
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            confirm_response = self.api_client.post(
+                reverse("order-confirm"),
+                {"order_id": order.pk, "contact_id": contact.pk},
+                format="json",
+            )
+        self.product_info.price = 999
+        self.product_info.save(update_fields=["price"])
+
+        history_response = self.api_client.get(reverse("orders"))
+        detail_response = self.api_client.get(reverse("order-detail", args=[order.pk]))
+
+        self.assertEqual(confirm_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(history_response.data["results"][0]["total_sum"], 200)
+        self.assertEqual(detail_response.data["total_sum"], 200)
+        self.assertEqual(detail_response.data["items"][0]["unit_price"], 100)
 
     def test_confirm_order_rejects_another_users_order_or_contact(self) -> None:
         own_contact = Contact.objects.create(user=self.user, **self.contact_payload)
@@ -199,6 +239,33 @@ class OrderAPITests(APITestCase):
         self.assertEqual(canceled_item.state, "canceled")
         self.assertEqual(confirmed_item.state, "canceled")
         self.assertEqual(self.product_info.reserved_quantity, 0)
+
+    def test_admin_cannot_cancel_order_with_sent_item(self) -> None:
+        admin_user = User.objects.create_user(
+            email="order-admin@example.com",
+            password="test-password",
+            type="admin",
+            is_staff=True,
+            is_active=True,
+        )
+        order = Order.objects.create(user=self.user, state="sent")
+        OrderItem.objects.create(
+            order=order,
+            product_info=self.product_info,
+            quantity=1,
+            state="sent",
+        )
+        self.api_client.force_authenticate(user=admin_user)
+
+        response = self.api_client.patch(
+            reverse("admin-order-detail", args=[order.pk]),
+            {"state": "canceled", "cancellation_reason": "Ошибка доставки"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        order.refresh_from_db()
+        self.assertEqual(order.state, "sent")
 
     @override_settings(
         EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",

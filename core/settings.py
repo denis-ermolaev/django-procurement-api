@@ -168,14 +168,15 @@ SPECTACULAR_SETTINGS = {
         "Djoser `POST /api/auth/users/`, активирует аккаунт по uid/token из письма `POST /api/auth/users/activation/`,"
         "получает JWT через `/api/auth/jwt/create/`, передает access token в заголовке "
         "`Authorization: Bearer <token>`, просматривает каталог, добавляет предложения "
-        "товаров в корзину, сохраняет адрес доставки и подтверждает заказ. "
+        "товаров в корзину через `/api/basket/items/`, сохраняет адрес доставки "
+        "через `/api/contacts/` и подтверждает заказ. "
         "Магазин регистрируется через отдельный endpoint `/api/shops/register/`, "
         "после чего администратор одобряет или блокирует заявку магазина через "
         "admin endpoints. "
-        "`Product` означает общий товар каталога, `ProductInfo` - предложение "
+        "`Product` означает общий товар каталога, `ProductInfo/Offer` - предложение "
         "конкретного магазина с ценой и остатком. Корзина хранится как заказ в "
         "статусе `basket`; история заказов показывает только оформленные заказы. "
-        "Все бизнес-эндпоинты `/api/products/`, `/api/basket/`, `/api/contact/` "
+        "Все бизнес-эндпоинты `/api/products/`, `/api/offers/`, `/api/basket/`, `/api/contacts/` "
         "и `/api/orders/` требуют JWT-аутентификацию."
     ),
     "VERSION": "1.0.0",
@@ -289,7 +290,8 @@ ADMIN_EMAILS = env_list("DJANGO_ADMIN_EMAILS", "admin1@example.com,admin2@exampl
 
 
 # 13. Logging ----
-LOG_LEVEL = os.getenv("DJANGO_LOG_LEVEL", "INFO").upper()
+DJANGO_LOGGING_ENABLED = env_bool("DJANGO_LOGGING_ENABLED", default=False)
+LOG_LEVEL = os.getenv("DJANGO_LOG_LEVEL", "WARNING").upper()
 LOG_LEVEL_CHOICES = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 if LOG_LEVEL not in LOG_LEVEL_CHOICES:
     raise ImproperlyConfigured(
@@ -297,7 +299,23 @@ if LOG_LEVEL not in LOG_LEVEL_CHOICES:
     )
 
 DJANGO_LOG_SQL = env_bool("DJANGO_LOG_SQL", default=False)
+DJANGO_LOG_MODULES = set(env_list("DJANGO_LOG_MODULES"))
 CONSOLE_LOG_LEVEL = "DEBUG" if DJANGO_LOG_SQL else LOG_LEVEL
+DISABLED_LOG_LEVEL = "CRITICAL"
+
+
+def module_log_level(logger_name: str) -> str:
+    if not DJANGO_LOGGING_ENABLED:
+        return DISABLED_LOG_LEVEL
+    if not DJANGO_LOG_MODULES:
+        return DISABLED_LOG_LEVEL
+    if logger_name in DJANGO_LOG_MODULES:
+        return LOG_LEVEL
+    for enabled_module in DJANGO_LOG_MODULES:
+        if logger_name.startswith(f"{enabled_module}."):
+            return LOG_LEVEL
+    return DISABLED_LOG_LEVEL
+
 
 LOGGING: dict[str, Any] = {
     "version": 1,
@@ -321,37 +339,43 @@ LOGGING: dict[str, Any] = {
     },
     "root": {
         "handlers": ["console"],
-        "level": LOG_LEVEL,
+        "level": LOG_LEVEL if DJANGO_LOGGING_ENABLED else DISABLED_LOG_LEVEL,
     },
     "loggers": {
         "api": {
             "handlers": ["console"],
-            "level": LOG_LEVEL,
+            "level": module_log_level("api"),
             "propagate": False,
         },
         "api.request": {
             "handlers": ["console"],
-            "level": LOG_LEVEL,
+            "level": module_log_level("api.request"),
             "propagate": False,
         },
         "django": {
             "handlers": ["console"],
-            "level": LOG_LEVEL,
+            "level": module_log_level("django"),
             "propagate": False,
         },
         "django.request": {
             "handlers": ["console"],
-            "level": "ERROR",
+            "level": (
+                "ERROR"
+                if module_log_level("django.request") != DISABLED_LOG_LEVEL
+                else DISABLED_LOG_LEVEL
+            ),
             "propagate": False,
         },
         "django.server": {
             "handlers": ["console"],
-            "level": LOG_LEVEL,
+            "level": module_log_level("django.server"),
             "propagate": False,
         },
         "django.db.backends": {
             "handlers": ["console"],
-            "level": "DEBUG" if DJANGO_LOG_SQL else "WARNING",
+            "level": "DEBUG"
+            if DJANGO_LOG_SQL
+            else module_log_level("django.db.backends"),
             "propagate": False,
         },
     },

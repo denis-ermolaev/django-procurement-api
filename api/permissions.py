@@ -12,7 +12,9 @@ class IsBuyer(BasePermission):
 
     def has_permission(self, request: Request, view: Any) -> bool:
         user = request.user
-        return bool(user and user.is_authenticated and user.type == "buyer")
+        return bool(
+            user and user.is_authenticated and user.is_active and user.type == "buyer"
+        )
 
 
 class IsShop(BasePermission):
@@ -20,7 +22,9 @@ class IsShop(BasePermission):
 
     def has_permission(self, request: Request, view: Any) -> bool:
         user = request.user
-        return bool(user and user.is_authenticated and user.type == "shop")
+        return bool(
+            user and user.is_authenticated and user.is_active and user.type == "shop"
+        )
 
 
 class IsActiveShop(BasePermission):
@@ -28,7 +32,9 @@ class IsActiveShop(BasePermission):
 
     def has_permission(self, request: Request, view: Any) -> bool:
         user = request.user
-        if not (user and user.is_authenticated and user.type == "shop"):
+        if not (
+            user and user.is_authenticated and user.is_active and user.type == "shop"
+        ):
             return False
 
         return Shop.objects.filter(owner=user, status="active").exists()
@@ -40,5 +46,9 @@ class IsAdminUserType(BasePermission):
     def has_permission(self, request: Request, view: Any) -> bool:
         user = request.user
         return bool(
-            user and user.is_authenticated and user.is_staff and user.type == "admin"
+            user
+            and user.is_authenticated
+            and user.is_staff
+            and user.type == "admin"
+            and user.is_active
         )

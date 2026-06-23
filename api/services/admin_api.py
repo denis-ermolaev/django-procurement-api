@@ -51,7 +51,7 @@ def update_user(user_id: int, user_data: dict[str, Any]) -> User:
     if changed_fields:
         user.save(update_fields=changed_fields)
     logger.info(
-        "admin_user_updated user_id=%s changed_fields=%s",
+        "[update_user] admin_user_updated user_id=%s changed_fields=%s",
         user.pk,
         changed_fields,
     )
@@ -62,7 +62,7 @@ def update_user(user_id: int, user_data: dict[str, Any]) -> User:
 def update_shop(shop_id: int, shop_data: dict[str, Any]) -> Shop:
     shop = get_object_or_404(Shop, pk=shop_id)
     changed_fields: list[str] = []
-    for field in ("name", "url", "status"):
+    for field in ("name", "url", "status", "is_accepting_orders"):
         if field in shop_data:
             setattr(shop, field, shop_data[field])
             changed_fields.append(field)
@@ -70,7 +70,7 @@ def update_shop(shop_id: int, shop_data: dict[str, Any]) -> Shop:
         changed_fields.append("updated_at")
         shop.save(update_fields=changed_fields)
     logger.info(
-        "admin_shop_updated shop_id=%s changed_fields=%s",
+        "[update_shop] admin_shop_updated shop_id=%s changed_fields=%s",
         shop.pk,
         changed_fields,
     )
@@ -89,14 +89,23 @@ def update_offer(product_info_id: int, offer_data: dict[str, Any]) -> ProductInf
         )
 
     changed_fields: list[str] = []
-    for field in ("name", "quantity", "price", "price_rrc", "status"):
+    for field in (
+        "external_id",
+        "model",
+        "name",
+        "quantity",
+        "price",
+        "price_rrc",
+        "status",
+    ):
         if field in offer_data:
             setattr(offer, field, offer_data[field])
             changed_fields.append(field)
     if changed_fields:
+        changed_fields.append("updated_at")
         offer.save(update_fields=changed_fields)
     logger.info(
-        "admin_offer_updated product_info_id=%s changed_fields=%s",
+        "[update_offer] admin_offer_updated product_info_id=%s changed_fields=%s",
         offer.pk,
         changed_fields,
     )
@@ -110,7 +119,7 @@ def get_all_categories() -> QuerySet[Category]:
 
 def create_category(category_data: dict[str, Any]) -> Category:
     category = Category.objects.create(**category_data)
-    logger.info("admin_category_created category_id=%s", category.pk)
+    logger.info("[create_category] admin_category_created category_id=%s", category.pk)
     return category
 
 
@@ -124,7 +133,7 @@ def update_category(category_id: int, category_data: dict[str, Any]) -> Category
     if changed_fields:
         category.save(update_fields=changed_fields)
     logger.info(
-        "admin_category_updated category_id=%s changed_fields=%s",
+        "[update_category] admin_category_updated category_id=%s changed_fields=%s",
         category.pk,
         changed_fields,
     )
@@ -137,7 +146,7 @@ def get_all_products() -> QuerySet[Product]:
 
 def create_product(product_data: dict[str, Any]) -> Product:
     product = Product.objects.create(**product_data)
-    logger.info("admin_product_created product_id=%s", product.pk)
+    logger.info("[create_product] admin_product_created product_id=%s", product.pk)
     return product
 
 
@@ -151,7 +160,7 @@ def update_product(product_id: int, product_data: dict[str, Any]) -> Product:
     if changed_fields:
         product.save(update_fields=changed_fields)
     logger.info(
-        "admin_product_updated product_id=%s changed_fields=%s",
+        "[update_product] admin_product_updated product_id=%s changed_fields=%s",
         product.pk,
         changed_fields,
     )
@@ -164,7 +173,9 @@ def get_all_parameters() -> QuerySet[Parameter]:
 
 def create_parameter(parameter_data: dict[str, Any]) -> Parameter:
     parameter = Parameter.objects.create(**parameter_data)
-    logger.info("admin_parameter_created parameter_id=%s", parameter.pk)
+    logger.info(
+        "[create_parameter] admin_parameter_created parameter_id=%s", parameter.pk
+    )
     return parameter
 
 
@@ -173,5 +184,7 @@ def update_parameter(parameter_id: int, parameter_data: dict[str, Any]) -> Param
     if "name" in parameter_data:
         parameter.name = parameter_data["name"]
         parameter.save(update_fields=["name"])
-    logger.info("admin_parameter_updated parameter_id=%s", parameter.pk)
+    logger.info(
+        "[update_parameter] admin_parameter_updated parameter_id=%s", parameter.pk
+    )
     return parameter

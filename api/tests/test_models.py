@@ -174,3 +174,67 @@ class DomainConstraintTests(TestCase):
                 quantity=0,
                 state="confirmed",
             )
+
+    def test_user_has_single_active_basket(self) -> None:
+        Order.objects.create(user=self.user, state="basket")
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Order.objects.create(user=self.user, state="basket")
+
+        Order.objects.create(user=self.user, state="confirmed")
+        self.assertEqual(Order.objects.filter(user=self.user).count(), 2)
+
+    def test_order_item_offer_is_unique_inside_order(self) -> None:
+        order = Order.objects.create(user=self.user, state="basket")
+        OrderItem.objects.create(
+            order=order,
+            product_info=self.product_info,
+            quantity=1,
+        )
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            OrderItem.objects.create(
+                order=order,
+                product_info=self.product_info,
+                quantity=1,
+            )
+
+    def test_offer_external_id_is_unique_per_shop_when_filled(self) -> None:
+        ProductInfo.objects.create(
+            product=self.product,
+            shop=self.shop,
+            external_id="offer-1",
+            name="Offer 1",
+            quantity=1,
+            price=100,
+            price_rrc=120,
+        )
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            ProductInfo.objects.create(
+                product=self.product,
+                shop=self.shop,
+                external_id="offer-1",
+                name="Offer duplicate",
+                quantity=1,
+                price=100,
+                price_rrc=120,
+            )
+
+    def test_parameter_name_and_offer_parameter_are_unique(self) -> None:
+        parameter = Parameter.objects.create(name="color")
+        ProductParameter.objects.create(
+            product_info=self.product_info,
+            parameter=parameter,
+            value="black",
+        )
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Parameter.objects.create(name="color")
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            ProductParameter.objects.create(
+                product_info=self.product_info,
+                parameter=parameter,
+                value="white",
+            )

@@ -184,3 +184,148 @@ class ProductAPITests(APITestCase):
         self.assertEqual(response.data["product"], self.product.pk)
         self.assertEqual(response.data["price"], 100)
         self.assertEqual(missing_response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_offer_list_requires_authentication(self) -> None:
+        response = self.api_client.get(reverse("offers"))
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_offer_list_returns_buyer_offer_cards(self) -> None:
+        self.authenticate()
+
+        response = self.api_client.get(reverse("offers"), {"page_size": 1})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 2)
+        self.assertEqual(len(response.data["results"]), 1)
+        offer = response.data["results"][0]
+        self.assertEqual(offer["offer_id"], self.product_info.pk)
+        self.assertEqual(offer["product_id"], self.product.pk)
+        self.assertEqual(offer["product_name"], self.product.name)
+        self.assertEqual(offer["offer_name"], self.product_info.name)
+        self.assertEqual(offer["shop_name"], self.shop.name)
+        self.assertEqual(offer["available_quantity"], 10)
+        self.assertTrue(offer["can_add_to_basket"])
+        self.assertEqual(offer["parameters"], [{"name": "color", "value": "black"}])
+        self.assertNotIn("reserved_quantity", offer)
+
+    def test_offer_list_filters_by_same_offer_fields(self) -> None:
+        ProductInfo.objects.create(
+            product=self.product,
+            shop=self.other_shop,
+            name="Test Phone expensive white offer",
+            quantity=7,
+            price=1000,
+            price_rrc=1100,
+        )
+        self.authenticate()
+
+        matching_response = self.api_client.get(
+            reverse("offers"),
+            {"shop_id": self.shop.pk, "price_max": 100, "parameter": "color:black"},
+        )
+        mixed_response = self.api_client.get(
+            reverse("offers"),
+            {
+                "shop_id": self.other_shop.pk,
+                "price_max": 100,
+                "parameter": "color:black",
+            },
+        )
+
+        self.assertEqual(matching_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(matching_response.data["count"], 1)
+        self.assertEqual(
+            matching_response.data["results"][0]["offer_id"],
+            self.product_info.pk,
+        )
+        self.assertEqual(mixed_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(mixed_response.data["count"], 0)
+
+    def test_offer_list_filters_by_search_category_and_stock(self) -> None:
+        self.product_info.reserved_quantity = self.product_info.quantity
+        self.product_info.save(update_fields=["reserved_quantity"])
+        self.authenticate()
+
+        response = self.api_client.get(
+            reverse("offers"),
+            {
+                "search": "laptop",
+                "category_id": self.other_category.pk,
+                "in_stock": "true",
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(
+            response.data["results"][0]["offer_id"],
+            self.other_product_info.pk,
+        )
+
+    def test_offer_detail_returns_offer_and_hides_unavailable(self) -> None:
+        hidden_offer = ProductInfo.objects.create(
+            product=self.product,
+            shop=self.shop,
+            name="Hidden offer",
+            quantity=3,
+            price=90,
+            price_rrc=100,
+            status="hidden",
+        )
+        self.authenticate()
+
+        response = self.api_client.get(
+            reverse("offer-detail", args=[self.product_info.pk])
+        )
+        hidden_response = self.api_client.get(
+            reverse("offer-detail", args=[hidden_offer.pk])
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["offer_id"], self.product_info.pk)
+        self.assertEqual(hidden_response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_paused_shop_offer_is_hidden_and_cannot_be_added_to_basket(self) -> None:
+        self.shop.is_accepting_orders = False
+        self.shop.save(update_fields=["is_accepting_orders"])
+        self.authenticate()
+
+        list_response = self.api_client.get(reverse("offers"))
+        detail_response = self.api_client.get(
+            reverse("offer-detail", args=[self.product_info.pk])
+        )
+        basket_response = self.api_client.post(
+            reverse("basket-items"),
+            {"offer_id": self.product_info.pk, "quantity": 1},
+            format="json",
+        )
+
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(list_response.data["count"], 1)
+        self.assertEqual(detail_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(basket_response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_product_offers_returns_offers_for_selected_product(self) -> None:
+        ProductInfo.objects.create(
+            product=self.product,
+            shop=self.other_shop,
+            name="Test Phone from second shop",
+            quantity=7,
+            price=95,
+            price_rrc=115,
+        )
+        self.authenticate()
+
+        response = self.api_client.get(
+            reverse("product-offers", args=[self.product.pk])
+        )
+        missing_response = self.api_client.get(
+            reverse("product-offers", args=[999_999])
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 2)
+        product_ids = {offer["product_id"] for offer in response.data["results"]}
+        self.assertEqual(product_ids, {self.product.pk})
+        self.assertEqual(missing_response.status_code, status.HTTP_404_NOT_FOUND)

@@ -1,8 +1,10 @@
 import logging
+from functools import partial
 
 from django.db import transaction
 from django.db.models import QuerySet
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from api.management.email_service import send_order_confirmation
@@ -41,9 +43,9 @@ def recalculate_order_state(order: Order) -> Order:
     if order.state != new_state:
         old_state = order.state
         order.state = new_state
-        order.save(update_fields=["state"])
+        order.save(update_fields=["state", "updated_at"])
         logger.info(
-            "order_state_recalculated order_id=%s old_state=%s new_state=%s",
+            "[recalculate_order_state] order_state_recalculated order_id=%s old_state=%s new_state=%s",
             order.pk,
             old_state,
             new_state,
@@ -62,7 +64,7 @@ def release_item_reserve(order_item: OrderItem) -> None:
     product_info.reserved_quantity -= released_quantity
     product_info.save(update_fields=["reserved_quantity"])
     logger.info(
-        "order_item_reserve_released order_id=%s item_id=%s product_info_id=%s quantity=%s",
+        "[release_item_reserve] order_item_reserve_released order_id=%s item_id=%s product_info_id=%s quantity=%s",
         order_item.order.pk,
         order_item.pk,
         product_info.pk,
@@ -89,7 +91,7 @@ def ship_item_stock(order_item: OrderItem) -> None:
     product_info.quantity -= order_item.quantity
     product_info.save(update_fields=["reserved_quantity", "quantity"])
     logger.info(
-        "order_item_stock_shipped order_id=%s item_id=%s product_info_id=%s quantity=%s",
+        "[ship_item_stock] order_item_stock_shipped order_id=%s item_id=%s product_info_id=%s quantity=%s",
         order_item.order.pk,
         order_item.pk,
         product_info.pk,
@@ -99,18 +101,38 @@ def ship_item_stock(order_item: OrderItem) -> None:
 
 def cancel_order_items(order: Order) -> None:
     for item in OrderItem.objects.select_for_update().filter(order=order):
-        if item.state != "canceled":
-            if item.state not in {"sent", "delivered"}:
-                release_item_reserve(item)
-            item.state = "canceled"
-            item.save(update_fields=["state"])
+        if item.state in {"sent", "delivered", "canceled"}:
+            continue
+        release_item_reserve(item)
+        item.state = "canceled"
+        item.save(update_fields=["state"])
+
+
+def apply_order_item_snapshot(item: OrderItem, product_info: ProductInfo) -> None:
+    item.unit_price = product_info.price
+    item.price_rrc_snapshot = product_info.price_rrc
+    item.product_name_snapshot = product_info.product.name
+    item.offer_name_snapshot = product_info.name
+    item.shop_name_snapshot = product_info.shop.name
+    item.external_id_snapshot = product_info.external_id
+
+
+def send_order_confirmation_after_commit(order_id: int) -> None:
+    try:
+        order = Order.objects.select_related("user").get(pk=order_id)
+        send_order_confirmation(order)
+    except Exception:
+        logger.exception(
+            "[send_order_confirmation_after_commit] order_confirm_email_failed order_id=%s",
+            order_id,
+        )
 
 
 # 2. Покупательские операции ----
 @transaction.atomic
 def confirm_order(user: User, *, order_id: int, contact_id: int) -> Order:
     logger.debug(
-        "order_confirm_started user_id=%s order_id=%s contact_id=%s",
+        "[confirm_order] order_confirm_started user_id=%s order_id=%s contact_id=%s",
         user.pk,
         order_id,
         contact_id,
@@ -125,7 +147,7 @@ def confirm_order(user: User, *, order_id: int, contact_id: int) -> Order:
     )
     if not items:
         logger.warning(
-            "order_confirm_rejected_empty_basket user_id=%s order_id=%s",
+            "[confirm_order] order_confirm_rejected_empty_basket user_id=%s order_id=%s",
             user.pk,
             order.pk,
         )
@@ -136,13 +158,16 @@ def confirm_order(user: User, *, order_id: int, contact_id: int) -> Order:
     contact = get_object_or_404(Contact, id=contact_id, user=user, is_deleted=False)
 
     for item in items:
-        product_info = ProductInfo.objects.select_for_update().get(
-            pk=item.product_info.pk
+        product_info = (
+            ProductInfo.objects.select_for_update()
+            .select_related("shop", "product__category")
+            .get(pk=item.product_info.pk)
         )
         available_quantity = product_info.quantity - product_info.reserved_quantity
         if (
             product_info.status != "active"
             or product_info.shop.status != "active"
+            or not product_info.shop.is_accepting_orders
             or product_info.product.status != "active"
             or product_info.product.category.status != "active"
         ):
@@ -156,7 +181,7 @@ def confirm_order(user: User, *, order_id: int, contact_id: int) -> Order:
         if item.quantity > available_quantity:
             logger.warning(
                 (
-                    "order_confirm_rejected_stock user_id=%s order_id=%s "
+                    "[confirm_order] order_confirm_rejected_stock user_id=%s order_id=%s "
                     "item_id=%s product_info_id=%s requested_quantity=%s available_quantity=%s"
                 ),
                 user.pk,
@@ -178,29 +203,38 @@ def confirm_order(user: User, *, order_id: int, contact_id: int) -> Order:
         product_info.reserved_quantity += item.quantity
         product_info.save(update_fields=["reserved_quantity"])
         item.state = "confirmed"
-        item.save(update_fields=["state"])
+        apply_order_item_snapshot(item, product_info)
+        item.save(
+            update_fields=[
+                "state",
+                "unit_price",
+                "price_rrc_snapshot",
+                "product_name_snapshot",
+                "offer_name_snapshot",
+                "shop_name_snapshot",
+                "external_id_snapshot",
+            ]
+        )
 
     order.state = "confirmed"
     order.contact = contact
-    order.save(update_fields=["state", "contact"])
+    order.confirmed_at = timezone.now()
+    order.save(update_fields=["state", "contact", "confirmed_at", "updated_at"])
 
     logger.info(
-        "order_confirmed user_id=%s order_id=%s contact_id=%s",
+        "[confirm_order] order_confirmed user_id=%s order_id=%s contact_id=%s",
         user.pk,
         order.pk,
         contact.pk,
     )
-    try:
-        send_order_confirmation(order)
-    except Exception:
-        logger.exception("order_confirm_email_failed order_id=%s", order.pk)
+    transaction.on_commit(partial(send_order_confirmation_after_commit, order.pk))
     return order
 
 
 def get_order_history(user: User) -> QuerySet[Order]:
     orders = Order.objects.filter(user=user).exclude(state="basket").order_by("id")
     logger.debug(
-        "order_history_loaded user_id=%s order_count=%s",
+        "[get_order_history] order_history_loaded user_id=%s order_count=%s",
         user.pk,
         orders.count(),
     )
@@ -210,7 +244,7 @@ def get_order_history(user: User) -> QuerySet[Order]:
 def get_user_order(user: User, pk: int) -> Order:
     order = get_object_or_404(Order, pk=pk, user=user)
     logger.debug(
-        "order_detail_loaded user_id=%s order_id=%s state=%s",
+        "[get_user_order] order_detail_loaded user_id=%s order_id=%s state=%s",
         user.pk,
         order.pk,
         order.state,
@@ -235,9 +269,11 @@ def cancel_order_by_buyer(order: Order) -> Order:
 
     cancel_order_items(order)
     order.state = "canceled"
-    order.save(update_fields=["state"])
+    order.save(update_fields=["state", "updated_at"])
     logger.info(
-        "order_canceled_by_buyer user_id=%s order_id=%s", order.user.pk, order.pk
+        "[cancel_order_by_buyer] order_canceled_by_buyer user_id=%s order_id=%s",
+        order.user.pk,
+        order.pk,
     )
     return order
 
@@ -258,7 +294,7 @@ def get_shop_order_items(user: User) -> QuerySet[OrderItem]:
         .order_by("id")
     )
     logger.debug(
-        "shop_order_items_loaded user_id=%s shop_id=%s item_count=%s",
+        "[get_shop_order_items] shop_order_items_loaded user_id=%s shop_id=%s item_count=%s",
         user.pk,
         shop.pk,
         items.count(),
@@ -271,6 +307,10 @@ def update_shop_order_item_state(
     user: User, *, item_id: int, new_state: str
 ) -> OrderItem:
     shop = get_object_or_404(Shop, owner=user)
+    if shop.status != "active" or not shop.is_accepting_orders:
+        raise ValidationError(
+            {"shop": "Магазин должен быть активным и принимать заказы."}
+        )
     item = get_object_or_404(
         OrderItem.objects.select_for_update().select_related("order", "product_info"),
         pk=item_id,
@@ -291,7 +331,7 @@ def update_shop_order_item_state(
         item.state = "canceled"
         item.save(update_fields=["state"])
         logger.info(
-            "shop_order_item_canceled user_id=%s shop_id=%s item_id=%s old_state=%s",
+            "[update_shop_order_item_state] shop_order_item_canceled user_id=%s shop_id=%s item_id=%s old_state=%s",
             user.pk,
             shop.pk,
             item.pk,
@@ -319,7 +359,7 @@ def update_shop_order_item_state(
     item.state = new_state
     item.save(update_fields=["state"])
     logger.info(
-        "shop_order_item_state_updated user_id=%s shop_id=%s item_id=%s old_state=%s new_state=%s",
+        "[update_shop_order_item_state] shop_order_item_state_updated user_id=%s shop_id=%s item_id=%s old_state=%s new_state=%s",
         user.pk,
         shop.pk,
         item.pk,
@@ -348,12 +388,20 @@ def update_order_state_by_admin(
     cancellation_reason: str = "",
 ) -> Order:
     if new_state == "canceled":
+        if OrderItem.objects.filter(
+            order=order, state__in=["sent", "delivered"]
+        ).exists():
+            raise ValidationError(
+                {
+                    "state": "Нельзя отменить заказ с отправленными или доставленными позициями."
+                }
+            )
         cancel_order_items(order)
         order.state = "canceled"
         order.cancellation_reason = cancellation_reason
-        order.save(update_fields=["state", "cancellation_reason"])
+        order.save(update_fields=["state", "cancellation_reason", "updated_at"])
         logger.info(
-            "order_canceled_by_admin admin_user_id=%s order_id=%s",
+            "[update_order_state_by_admin] order_canceled_by_admin admin_user_id=%s order_id=%s",
             admin_user.pk,
             order.pk,
         )
@@ -364,11 +412,11 @@ def update_order_state_by_admin(
         order.state = new_state
         if cancellation_reason:
             order.cancellation_reason = cancellation_reason
-            order.save(update_fields=["state", "cancellation_reason"])
+            order.save(update_fields=["state", "cancellation_reason", "updated_at"])
         else:
-            order.save(update_fields=["state"])
+            order.save(update_fields=["state", "updated_at"])
         logger.info(
-            "order_state_updated_by_admin admin_user_id=%s order_id=%s old_state=%s new_state=%s",
+            "[update_order_state_by_admin] order_state_updated_by_admin admin_user_id=%s order_id=%s old_state=%s new_state=%s",
             admin_user.pk,
             order.pk,
             old_state,
@@ -404,6 +452,10 @@ def update_order_item_state_by_admin(
         raise ValidationError(
             {"state": "Нельзя вернуть доставленную позицию в статус sent."}
         )
+    if item.state in {"sent", "delivered"} and new_state == "canceled":
+        raise ValidationError(
+            {"state": "Нельзя отменить отправленную или доставленную позицию."}
+        )
     if new_state == "canceled" and item.state not in {"sent", "delivered", "canceled"}:
         release_item_reserve(item)
     if new_state in {"sent", "delivered"} and item.state not in {"sent", "delivered"}:
@@ -411,7 +463,7 @@ def update_order_item_state_by_admin(
     item.state = new_state
     item.save(update_fields=["state"])
     logger.info(
-        "order_item_state_updated_by_admin admin_user_id=%s item_id=%s old_state=%s new_state=%s",
+        "[update_order_item_state_by_admin] order_item_state_updated_by_admin admin_user_id=%s item_id=%s old_state=%s new_state=%s",
         admin_user.pk,
         item.pk,
         old_state,

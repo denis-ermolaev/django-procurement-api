@@ -17,6 +17,7 @@ from .models import (
     Parameter,
     Product,
     ProductInfo,
+    ProductParameter,
     Shop,
     User,
 )
@@ -119,6 +120,7 @@ class ShopSerializer(serializers.ModelSerializer):
             "url",
             "owner",
             "status",
+            "is_accepting_orders",
             "created_at",
             "updated_at",
         )
@@ -128,6 +130,7 @@ class ShopSerializer(serializers.ModelSerializer):
             "url": {"help_text": "URL магазина. Может быть пустой строкой."},
             "owner": {"read_only": True, "help_text": "ID пользователя-владельца."},
             "status": {"read_only": True, "help_text": "Статус модерации магазина."},
+            "is_accepting_orders": {"help_text": "Принимает ли магазин новые заказы."},
             "created_at": {
                 "read_only": True,
                 "help_text": "Дата и время создания магазина.",
@@ -226,27 +229,129 @@ class ProductInfoSerializer(serializers.ModelSerializer):
             "id",
             "product",
             "shop",
+            "external_id",
+            "model",
             "name",
             "quantity",
             "available_quantity",
             "price",
             "price_rrc",
+            "status",
         )
         extra_kwargs = {
             "id": {"read_only": True, "help_text": "ID конкретного предложения."},
             "product": {"help_text": "ID товара Product из общего каталога."},
             "shop": {"help_text": "ID магазина, который продает это предложение."},
+            "external_id": {"help_text": "Стабильный ID предложения в прайсе."},
+            "model": {"help_text": "Модель или артикул предложения."},
             "name": {"help_text": "Название предложения в прайсе магазина."},
             "quantity": {
                 "help_text": "Доступный остаток. При добавлении в корзину quantity не может быть больше этого значения."
             },
             "price": {"help_text": "Фактическая цена предложения."},
             "price_rrc": {"help_text": "Рекомендованная розничная цена."},
+            "status": {"help_text": "Статус предложения."},
         }
 
     @extend_schema_field(OpenApiTypes.INT)
     def get_available_quantity(self, obj: ProductInfo) -> int:
         return max(obj.quantity - obj.reserved_quantity, 0)
+
+
+class OfferParameterSerializer(serializers.Serializer):
+    name = serializers.CharField(read_only=True, help_text="Название характеристики.")
+    value = serializers.CharField(read_only=True, help_text="Значение характеристики.")
+
+
+class BuyerOfferSerializer(serializers.ModelSerializer):
+    offer_id = serializers.IntegerField(
+        source="id",
+        read_only=True,
+        help_text="ID предложения ProductInfo.",
+    )
+    product_id = serializers.IntegerField(
+        source="product.id",
+        read_only=True,
+        help_text="ID общего товара Product.",
+    )
+    product_name = serializers.CharField(
+        source="product.name",
+        read_only=True,
+        help_text="Название общего товара.",
+    )
+    offer_name = serializers.CharField(
+        source="name",
+        read_only=True,
+        help_text="Название предложения в прайсе магазина.",
+    )
+    shop_id = serializers.IntegerField(
+        source="shop.id",
+        read_only=True,
+        help_text="ID магазина.",
+    )
+    shop_name = serializers.CharField(
+        source="shop.name",
+        read_only=True,
+        help_text="Название магазина.",
+    )
+    model = serializers.CharField(read_only=True, help_text="Модель или артикул.")
+    available_quantity = serializers.SerializerMethodField(
+        help_text="Доступный к покупке остаток: quantity - reserved_quantity."
+    )
+    parameters = serializers.SerializerMethodField(
+        help_text="Характеристики конкретного предложения."
+    )
+    can_add_to_basket = serializers.SerializerMethodField(
+        help_text="Можно ли добавить предложение в корзину покупателя."
+    )
+
+    class Meta:
+        model = ProductInfo
+        fields = (
+            "id",
+            "offer_id",
+            "product_id",
+            "product_name",
+            "offer_name",
+            "shop_id",
+            "shop_name",
+            "model",
+            "quantity",
+            "available_quantity",
+            "price",
+            "price_rrc",
+            "status",
+            "parameters",
+            "can_add_to_basket",
+        )
+
+    @extend_schema_field(OpenApiTypes.INT)
+    def get_available_quantity(self, obj: ProductInfo) -> int:
+        return max(obj.quantity - obj.reserved_quantity, 0)
+
+    @extend_schema_field(OfferParameterSerializer(many=True))
+    def get_parameters(self, obj: ProductInfo) -> list[dict[str, str]]:
+        parameters: list[ProductParameter] = list(
+            ProductParameter.objects.filter(product_info=obj)
+            .select_related("parameter")
+            .order_by(
+                "parameter__name",
+            )
+        )
+        return [
+            {"name": item.parameter.name, "value": item.value} for item in parameters
+        ]
+
+    @extend_schema_field(OpenApiTypes.BOOL)
+    def get_can_add_to_basket(self, obj: ProductInfo) -> bool:
+        return (
+            obj.status == "active"
+            and obj.shop.status == "active"
+            and obj.shop.is_accepting_orders
+            and obj.product.status == "active"
+            and obj.product.category.status == "active"
+            and self.get_available_quantity(obj) > 0
+        )
 
 
 class OfferSerializer(serializers.ModelSerializer):
@@ -260,6 +365,8 @@ class OfferSerializer(serializers.ModelSerializer):
             "id",
             "product",
             "shop",
+            "external_id",
+            "model",
             "name",
             "quantity",
             "reserved_quantity",
@@ -267,11 +374,13 @@ class OfferSerializer(serializers.ModelSerializer):
             "price",
             "price_rrc",
             "status",
+            "updated_at",
         )
         extra_kwargs = {
             "id": {"read_only": True},
             "shop": {"read_only": True},
             "reserved_quantity": {"read_only": True},
+            "updated_at": {"read_only": True},
             "status": {"help_text": "Статус предложения магазина."},
         }
 
@@ -298,8 +407,19 @@ class ShopOfferCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ProductInfo
-        fields = ("product", "name", "quantity", "price", "price_rrc", "status")
+        fields = (
+            "product",
+            "external_id",
+            "model",
+            "name",
+            "quantity",
+            "price",
+            "price_rrc",
+            "status",
+        )
         extra_kwargs = {
+            "external_id": {"required": False, "allow_blank": True},
+            "model": {"required": False, "allow_blank": True},
             "status": {
                 "required": False,
                 "help_text": "Статус предложения. По умолчанию active.",
@@ -354,8 +474,18 @@ class ShopOfferUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ProductInfo
-        fields = ("name", "quantity", "price", "price_rrc", "status")
+        fields = (
+            "external_id",
+            "model",
+            "name",
+            "quantity",
+            "price",
+            "price_rrc",
+            "status",
+        )
         extra_kwargs = {
+            "external_id": {"required": False, "allow_blank": True},
+            "model": {"required": False, "allow_blank": True},
             "name": {"required": False},
             "quantity": {"required": False},
             "price": {"required": False},
@@ -390,11 +520,22 @@ class ParameterSerializer(serializers.ModelSerializer):
 class OrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
-        fields = ("id", "user", "dt", "state", "cancellation_reason")
+        fields = (
+            "id",
+            "user",
+            "dt",
+            "confirmed_at",
+            "state",
+            "cancellation_reason",
+        )
         extra_kwargs = {
             "id": {"read_only": True, "help_text": "ID заказа."},
             "user": {"read_only": True, "help_text": "ID владельца заказа."},
             "dt": {"read_only": True, "help_text": "Дата и время создания заказа."},
+            "confirmed_at": {
+                "read_only": True,
+                "help_text": "Дата и время подтверждения заказа.",
+            },
             "state": {"help_text": "Текущий статус заказа."},
             "cancellation_reason": {
                 "read_only": True,
@@ -440,6 +581,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             "id",
             "user",
             "dt",
+            "confirmed_at",
             "state",
             "contact",
             "cancellation_reason",
@@ -450,6 +592,10 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             "id": {"read_only": True, "help_text": "ID заказа."},
             "user": {"read_only": True, "help_text": "ID владельца заказа."},
             "dt": {"read_only": True, "help_text": "Дата и время создания заказа."},
+            "confirmed_at": {
+                "read_only": True,
+                "help_text": "Дата и время подтверждения заказа.",
+            },
             "state": {"help_text": "Текущий статус заказа."},
         }
 
@@ -457,7 +603,8 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     def get_total_sum(self, obj: Order) -> int:
         total = 0
         for item in OrderItem.objects.filter(order=obj).select_related("product_info"):
-            total += item.quantity * item.product_info.price
+            unit_price = item.unit_price or item.product_info.price
+            total += item.quantity * unit_price
         return total
 
 
@@ -490,13 +637,32 @@ class ContactSerializer(serializers.ModelSerializer):
 
 # 7. Сериализаторы входных команд ----
 class AddToBasketSerializer(serializers.Serializer):
+    offer_id = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        help_text="ID предложения Offer/ProductInfo, которое нужно добавить в корзину.",
+    )
     product_info_id = serializers.IntegerField(
         min_value=1,
-        help_text="ID предложения товара, которое нужно добавить в корзину.",
+        required=False,
+        help_text="Legacy alias для offer_id.",
     )
     quantity = serializers.IntegerField(
         min_value=1,
         help_text="Количество добавляемых единиц. Минимальное значение: 1.",
+    )
+
+    def validate(self, attrs):
+        if not attrs.get("offer_id") and not attrs.get("product_info_id"):
+            raise serializers.ValidationError({"offer_id": "Передайте offer_id."})
+        attrs["offer_id"] = attrs.get("offer_id") or attrs["product_info_id"]
+        return attrs
+
+
+class UpdateBasketItemSerializer(serializers.Serializer):
+    quantity = serializers.IntegerField(
+        min_value=1,
+        help_text="Новое количество позиции корзины.",
     )
 
 
@@ -541,13 +707,14 @@ class OrderHistorySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Order
-        fields = ("id", "dt", "total_sum", "state")
+        fields = ("id", "dt", "confirmed_at", "total_sum", "state")
 
     @extend_schema_field(OpenApiTypes.INT)
     def get_total_sum(self, obj: Order) -> int:
         total = 0
         for item in OrderItem.objects.filter(order=obj).select_related("product_info"):
-            total += item.quantity * item.product_info.price
+            unit_price = item.unit_price or item.product_info.price
+            total += item.quantity * unit_price
         return total
 
 
@@ -631,11 +798,12 @@ class AdminUserUpdateSerializer(serializers.ModelSerializer):
 class AdminShopUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Shop
-        fields = ("name", "url", "status")
+        fields = ("name", "url", "status", "is_accepting_orders")
         extra_kwargs = {
             "name": {"required": False},
             "url": {"required": False},
             "status": {"required": False},
+            "is_accepting_orders": {"required": False},
         }
 
 
@@ -660,8 +828,18 @@ class AdminOfferUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ProductInfo
-        fields = ("name", "quantity", "price", "price_rrc", "status")
+        fields = (
+            "external_id",
+            "model",
+            "name",
+            "quantity",
+            "price",
+            "price_rrc",
+            "status",
+        )
         extra_kwargs = {
+            "external_id": {"required": False, "allow_blank": True},
+            "model": {"required": False, "allow_blank": True},
             "name": {"required": False},
             "quantity": {"required": False},
             "price": {"required": False},
@@ -701,6 +879,23 @@ class PaginatedProductResponseSerializer(serializers.Serializer):
     results = ProductSerializer(many=True, read_only=True)
 
 
+class PaginatedBuyerOfferResponseSerializer(serializers.Serializer):
+    count = serializers.IntegerField(
+        read_only=True, help_text="Общее количество предложений."
+    )
+    next = serializers.URLField(
+        allow_null=True,
+        read_only=True,
+        help_text="URL следующей страницы или null, если следующей страницы нет.",
+    )
+    previous = serializers.URLField(
+        allow_null=True,
+        read_only=True,
+        help_text="URL предыдущей страницы или null, если предыдущей страницы нет.",
+    )
+    results = BuyerOfferSerializer(many=True, read_only=True)
+
+
 class PaginatedOrderHistoryResponseSerializer(serializers.Serializer):
     count = serializers.IntegerField(
         read_only=True, help_text="Общее количество заказов."
@@ -718,8 +913,44 @@ class PaginatedOrderHistoryResponseSerializer(serializers.Serializer):
     results = OrderHistorySerializer(many=True, read_only=True)
 
 
+class BasketItemSummarySerializer(serializers.Serializer):
+    id = serializers.IntegerField(read_only=True, help_text="ID позиции корзины.")
+    offer_id = serializers.IntegerField(read_only=True, help_text="ID предложения.")
+    product_name = serializers.CharField(read_only=True, help_text="Название товара.")
+    offer_name = serializers.CharField(
+        read_only=True, help_text="Название предложения."
+    )
+    shop_name = serializers.CharField(read_only=True, help_text="Название магазина.")
+    unit_price = serializers.IntegerField(read_only=True, help_text="Текущая цена.")
+    quantity = serializers.IntegerField(read_only=True, help_text="Количество.")
+    line_total = serializers.IntegerField(read_only=True, help_text="Сумма позиции.")
+    available_quantity = serializers.IntegerField(
+        read_only=True, help_text="Доступный остаток."
+    )
+    state = serializers.CharField(read_only=True, help_text="Статус позиции.")
+    warnings = serializers.ListField(
+        child=serializers.CharField(),
+        read_only=True,
+        help_text="Предупреждения о недоступности позиции.",
+    )
+    is_available = serializers.BooleanField(
+        read_only=True, help_text="Можно ли оформить позицию."
+    )
+
+
+class BasketSerializer(serializers.Serializer):
+    id = serializers.IntegerField(
+        allow_null=True,
+        read_only=True,
+        help_text="ID заказа-корзины или null, если корзина еще не создана.",
+    )
+    state = serializers.CharField(read_only=True, help_text="Статус корзины.")
+    items = BasketItemSummarySerializer(many=True, read_only=True)
+    total = serializers.IntegerField(read_only=True, help_text="Итоговая сумма.")
+
+
 class BasketItemResponseSerializer(serializers.Serializer):
-    data = OrderItemSerializer(read_only=True)
+    data = BasketItemSummarySerializer(read_only=True)
 
 
 class ContactResponseSerializer(serializers.Serializer):
@@ -739,3 +970,33 @@ class OrderConfirmResponseSerializer(serializers.Serializer):
 
 class ErrorDetailSerializer(serializers.Serializer):
     detail = serializers.CharField(read_only=True, help_text="Описание ошибки.")
+
+
+class ShopImportSerializer(serializers.Serializer):
+    file = serializers.FileField(
+        required=False,
+        help_text="YAML-файл прайса магазина.",
+    )
+    content = serializers.CharField(
+        required=False,
+        allow_blank=False,
+        help_text="YAML-содержимое прайса, если файл не передается multipart-запросом.",
+    )
+
+    def validate(self, attrs):
+        if not attrs.get("file") and not attrs.get("content"):
+            raise serializers.ValidationError(
+                {"file": "Передайте YAML-файл или поле content."}
+            )
+        return attrs
+
+
+class ShopImportResultSerializer(serializers.Serializer):
+    loaded_count = serializers.IntegerField(read_only=True)
+    skipped_count = serializers.IntegerField(read_only=True)
+    created_products = serializers.IntegerField(read_only=True)
+    updated_products = serializers.IntegerField(read_only=True)
+    created_offers = serializers.IntegerField(read_only=True)
+    updated_offers = serializers.IntegerField(read_only=True)
+    hidden_offers = serializers.IntegerField(read_only=True)
+    parameter_count = serializers.IntegerField(read_only=True)

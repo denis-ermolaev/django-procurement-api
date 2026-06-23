@@ -162,6 +162,10 @@ class Shop(models.Model):
         max_length=10,
         default="pending",
     )
+    is_accepting_orders = models.BooleanField(
+        verbose_name="Принимает заказы",
+        default=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -205,6 +209,8 @@ class Product(models.Model):
 class ProductInfo(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
     shop = models.ForeignKey(Shop, on_delete=models.CASCADE)
+    external_id = models.CharField(max_length=100, blank=True, db_index=True)
+    model = models.CharField(max_length=150, blank=True)
     name = models.CharField(max_length=150)
     quantity = models.IntegerField()
     reserved_quantity = models.PositiveIntegerField(default=0)
@@ -216,6 +222,7 @@ class ProductInfo(models.Model):
         max_length=10,
         default="active",
     )
+    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"{self.name} ({self.shop})"
@@ -242,11 +249,16 @@ class ProductInfo(models.Model):
                 condition=models.Q(price_rrc__gte=0),
                 name="product_info_price_rrc_gte_0",
             ),
+            models.UniqueConstraint(
+                fields=["shop", "external_id"],
+                condition=~models.Q(external_id=""),
+                name="unique_offer_shop_external_id",
+            ),
         ]
 
 
 class Parameter(models.Model):
-    name = models.CharField(max_length=150)
+    name = models.CharField(max_length=150, unique=True)
 
     def __str__(self):
         return self.name
@@ -259,6 +271,14 @@ class ProductParameter(models.Model):
 
     def __str__(self):
         return f"{self.parameter}: {self.value}"
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["product_info", "parameter"],
+                name="unique_product_parameter_per_offer",
+            ),
+        ]
 
 
 class Contact(models.Model):
@@ -286,6 +306,8 @@ class Contact(models.Model):
 class Order(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     dt = models.DateTimeField(auto_now_add=True)
+    confirmed_at = models.DateTimeField(blank=True, null=True)
+    updated_at = models.DateTimeField(auto_now=True)
     state = models.CharField(
         verbose_name="Статус", choices=STATE_CHOICES, max_length=20
     )
@@ -296,6 +318,15 @@ class Order(models.Model):
 
     def __str__(self):
         return f"Order #{self.pk} ({self.state})"
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user"],
+                condition=models.Q(state="basket"),
+                name="unique_active_basket_per_user",
+            ),
+        ]
 
 
 class OrderItem(models.Model):
@@ -314,6 +345,12 @@ class OrderItem(models.Model):
         max_length=15,
         default="basket",
     )
+    unit_price = models.IntegerField(default=0)
+    price_rrc_snapshot = models.IntegerField(default=0)
+    product_name_snapshot = models.CharField(max_length=150, blank=True)
+    offer_name_snapshot = models.CharField(max_length=150, blank=True)
+    shop_name_snapshot = models.CharField(max_length=150, blank=True)
+    external_id_snapshot = models.CharField(max_length=100, blank=True)
 
     def __str__(self):
         return f"{self.product_info} x {self.quantity}"
@@ -323,5 +360,9 @@ class OrderItem(models.Model):
             models.CheckConstraint(
                 condition=models.Q(quantity__gte=1),
                 name="order_item_quantity_gte_1",
+            ),
+            models.UniqueConstraint(
+                fields=["order", "product_info"],
+                name="unique_order_item_offer",
             ),
         ]

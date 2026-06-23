@@ -79,3 +79,46 @@ class ContactAPITests(APITestCase):
         contact.refresh_from_db()
         self.assertTrue(contact.is_deleted)
         self.assertEqual(list_response.data, {"data": []})
+
+    def test_contact_resource_get_patch_and_delete(self) -> None:
+        contact = Contact.objects.create(user=self.user, **self.contact_payload)
+        self.authenticate()
+
+        get_response = self.api_client.get(reverse("contact-detail", args=[contact.pk]))
+        patch_response = self.api_client.patch(
+            reverse("contact-detail", args=[contact.pk]),
+            {"city": "Moscow"},
+            format="json",
+        )
+        delete_response = self.api_client.delete(
+            reverse("contact-detail", args=[contact.pk])
+        )
+
+        self.assertEqual(get_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(get_response.data["id"], contact.pk)
+        self.assertEqual(patch_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(patch_response.data["city"], "Moscow")
+        self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Contact.objects.filter(id=contact.pk).exists())
+
+    def test_contact_resource_returns_404_for_deleted_or_foreign_contact(self) -> None:
+        own_contact = Contact.objects.create(
+            user=self.user,
+            is_deleted=True,
+            **self.contact_payload,
+        )
+        other_contact = Contact.objects.create(
+            user=self.other_user,
+            **self.contact_payload,
+        )
+        self.authenticate()
+
+        deleted_response = self.api_client.get(
+            reverse("contact-detail", args=[own_contact.pk])
+        )
+        foreign_response = self.api_client.get(
+            reverse("contact-detail", args=[other_contact.pk])
+        )
+
+        self.assertEqual(deleted_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(foreign_response.status_code, status.HTTP_404_NOT_FOUND)

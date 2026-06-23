@@ -195,6 +195,32 @@ class ShopOrderItemAPITests(APITestCase):
         self.assertEqual(order.state, "canceled")
         self.assertEqual(self.product_info.reserved_quantity, 0)
 
+    def test_inactive_or_paused_shop_cannot_process_order_item(self) -> None:
+        _, item = self.create_confirmed_item()
+        self.api_client.force_authenticate(user=self.shop_user)
+
+        self.shop.status = "blocked"
+        self.shop.save(update_fields=["status"])
+        blocked_response = self.api_client.patch(
+            reverse("shop-order-item-detail", args=[item.pk]),
+            {"state": "accepted"},
+            format="json",
+        )
+
+        self.shop.status = "active"
+        self.shop.is_accepting_orders = False
+        self.shop.save(update_fields=["status", "is_accepting_orders"])
+        paused_response = self.api_client.patch(
+            reverse("shop-order-item-detail", args=[item.pk]),
+            {"state": "accepted"},
+            format="json",
+        )
+
+        self.assertEqual(blocked_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(paused_response.status_code, status.HTTP_400_BAD_REQUEST)
+        item.refresh_from_db()
+        self.assertEqual(item.state, "confirmed")
+
 
 class AdminAPITests(APITestCase):
     def setUp(self) -> None:

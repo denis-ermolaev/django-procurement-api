@@ -28,7 +28,7 @@ def register_shop(shop_data: dict[str, Any]) -> tuple[User, Shop]:
         status="pending",
     )
     logger.info(
-        "shop_registered user_id=%s shop_id=%s status=%s",
+        "[register_shop] shop_registered user_id=%s shop_id=%s status=%s",
         user.pk,
         shop.pk,
         shop.status,
@@ -42,7 +42,7 @@ def approve_shop(admin_user: User, *, shop_id: int) -> Shop:
     shop.status = "active"
     shop.save(update_fields=["status", "updated_at"])
     logger.info(
-        "shop_approved admin_user_id=%s shop_id=%s old_status=%s new_status=%s",
+        "[approve_shop] shop_approved admin_user_id=%s shop_id=%s old_status=%s new_status=%s",
         admin_user.pk,
         shop.pk,
         old_status,
@@ -57,7 +57,7 @@ def block_shop(admin_user: User, *, shop_id: int) -> Shop:
     shop.status = "blocked"
     shop.save(update_fields=["status", "updated_at"])
     logger.info(
-        "shop_blocked admin_user_id=%s shop_id=%s old_status=%s new_status=%s",
+        "[block_shop] shop_blocked admin_user_id=%s shop_id=%s old_status=%s new_status=%s",
         admin_user.pk,
         shop.pk,
         old_status,
@@ -73,11 +73,20 @@ def get_user_shop(user: User) -> Shop:
 
 def update_user_shop(user: User, shop_data: dict[str, Any]) -> Shop:
     shop = get_user_shop(user)
-    for field in ("name", "url"):
+    changed_fields: list[str] = []
+    for field in ("name", "url", "is_accepting_orders"):
         if field in shop_data:
             setattr(shop, field, shop_data[field])
-    shop.save(update_fields=["name", "url", "updated_at"])
-    logger.info("shop_profile_updated user_id=%s shop_id=%s", user.pk, shop.pk)
+            changed_fields.append(field)
+    if changed_fields:
+        changed_fields.append("updated_at")
+        shop.save(update_fields=changed_fields)
+    logger.info(
+        "[update_user_shop] shop_profile_updated user_id=%s shop_id=%s changed_fields=%s",
+        user.pk,
+        shop.pk,
+        changed_fields,
+    )
     return shop
 
 
@@ -89,7 +98,7 @@ def get_shop_offers(user: User) -> QuerySet[ProductInfo]:
         .order_by("id")
     )
     logger.debug(
-        "shop_offers_loaded user_id=%s shop_id=%s offer_count=%s",
+        "[get_shop_offers] shop_offers_loaded user_id=%s shop_id=%s offer_count=%s",
         user.pk,
         shop.pk,
         offers.count(),
@@ -111,6 +120,8 @@ def create_shop_offer(user: User, offer_data: dict[str, Any]) -> ProductInfo:
     offer = ProductInfo.objects.create(
         shop=shop,
         product=product,
+        external_id=offer_data.get("external_id", ""),
+        model=offer_data.get("model", ""),
         name=offer_data["name"],
         quantity=offer_data["quantity"],
         price=offer_data["price"],
@@ -118,7 +129,7 @@ def create_shop_offer(user: User, offer_data: dict[str, Any]) -> ProductInfo:
         status=offer_data.get("status", "active"),
     )
     logger.info(
-        "shop_offer_created user_id=%s shop_id=%s product_info_id=%s product_id=%s",
+        "[create_shop_offer] shop_offer_created user_id=%s shop_id=%s product_info_id=%s product_id=%s",
         user.pk,
         shop.pk,
         offer.pk,
@@ -145,14 +156,23 @@ def update_shop_offer(
         )
 
     changed_fields: list[str] = []
-    for field in ("name", "quantity", "price", "price_rrc", "status"):
+    for field in (
+        "external_id",
+        "model",
+        "name",
+        "quantity",
+        "price",
+        "price_rrc",
+        "status",
+    ):
         if field in offer_data:
             setattr(offer, field, offer_data[field])
             changed_fields.append(field)
     if changed_fields:
+        changed_fields.append("updated_at")
         offer.save(update_fields=changed_fields)
     logger.info(
-        "shop_offer_updated user_id=%s shop_id=%s product_info_id=%s changed_fields=%s",
+        "[update_shop_offer] shop_offer_updated user_id=%s shop_id=%s product_info_id=%s changed_fields=%s",
         user.pk,
         shop.pk,
         offer.pk,

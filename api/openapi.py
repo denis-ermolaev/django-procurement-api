@@ -14,22 +14,26 @@ from api.serializers import (
     AdminShopUpdateSerializer,
     AdminUserUpdateSerializer,
     BasketItemResponseSerializer,
+    BasketSerializer,
+    BuyerOfferSerializer,
     CategorySerializer,
     ContactListResponseSerializer,
     ContactResponseSerializer,
     ContactSerializer,
     ErrorDetailSerializer,
     OfferSerializer,
-    OrderConfirmResponseSerializer,
     OrderConfirmSerializer,
     OrderDetailSerializer,
     OrderItemSerializer,
     OrderUpdateSerializer,
+    PaginatedBuyerOfferResponseSerializer,
     PaginatedOrderHistoryResponseSerializer,
     PaginatedProductResponseSerializer,
     ParameterSerializer,
     ProductInfoSerializer,
     ProductSerializer,
+    ShopImportResultSerializer,
+    ShopImportSerializer,
     ShopOfferCreateSerializer,
     ShopOfferUpdateSerializer,
     ShopOrderItemUpdateSerializer,
@@ -278,6 +282,25 @@ shop_offer_update_schema = extend_schema(
         401: AUTH_REQUIRED_RESPONSE,
         403: FORBIDDEN_RESPONSE,
         404: NOT_FOUND_RESPONSE,
+    },
+)
+
+shop_import_create_schema = extend_schema(
+    operation_id="shop_import_create",
+    summary="Импортировать YAML-прайс магазина",
+    description=(
+        "Минимальный синхронный API-импорт для поставщика. Endpoint принимает "
+        "YAML-файл multipart-полем file или YAML-строку в JSON-поле content, "
+        "проверяет структуру fail-fast и атомарно обновляет предложения по "
+        "стабильному ключу shop + external_id."
+    ),
+    tags=["Shops"],
+    request=ShopImportSerializer,
+    responses={
+        200: ShopImportResultSerializer,
+        400: VALIDATION_ERROR_RESPONSE,
+        401: AUTH_REQUIRED_RESPONSE,
+        403: FORBIDDEN_RESPONSE,
     },
 )
 
@@ -688,35 +711,193 @@ product_detail_schema = extend_schema(
     },
 )
 
+offer_list_schema = extend_schema(
+    operation_id="offer_list",
+    summary="Список доступных предложений",
+    description=(
+        "Возвращает покупательский список Offer/ProductInfo. В отличие от "
+        "`/api/products/`, этот endpoint показывает конкретные предложения "
+        "магазинов с ценой, остатком и характеристиками. Все фильтры применяются "
+        "к одному и тому же ProductInfo."
+    ),
+    tags=["Products"],
+    parameters=[
+        OpenApiParameter(
+            name="page",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Номер страницы. Нумерация начинается с 1.",
+        ),
+        OpenApiParameter(
+            name="page_size",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Количество предложений на страницу. Допустимый диапазон: 1-100.",
+        ),
+        OpenApiParameter(
+            name="search",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            description="Поиск по названию товара или предложения.",
+        ),
+        OpenApiParameter(
+            name="category_id",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="ID категории товара.",
+        ),
+        OpenApiParameter(
+            name="shop_id",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="ID магазина.",
+        ),
+        OpenApiParameter(
+            name="price_min",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Минимальная цена предложения.",
+        ),
+        OpenApiParameter(
+            name="price_max",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Максимальная цена предложения.",
+        ),
+        OpenApiParameter(
+            name="parameter",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            description="Фильтр по характеристике предложения в формате 'имя:значение'.",
+        ),
+        OpenApiParameter(
+            name="in_stock",
+            type=OpenApiTypes.BOOL,
+            location=OpenApiParameter.QUERY,
+            description="Если true, возвращаются только предложения с доступным остатком.",
+        ),
+        OpenApiParameter(
+            name="ordering",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            description="Сортировка: id, -id, price, -price, quantity, -quantity.",
+        ),
+    ],
+    responses={
+        200: OpenApiResponse(
+            response=PaginatedBuyerOfferResponseSerializer,
+            description="Постраничный список предложений.",
+            examples=[
+                OpenApiExample(
+                    "Предложения",
+                    value={
+                        "count": 1,
+                        "next": None,
+                        "previous": None,
+                        "results": [
+                            {
+                                "id": 1,
+                                "offer_id": 1,
+                                "product_id": 1,
+                                "product_name": "Смартфон",
+                                "offer_name": "Смартфон 128GB",
+                                "shop_id": 1,
+                                "shop_name": "Main shop",
+                                "quantity": 10,
+                                "available_quantity": 8,
+                                "price": 1000,
+                                "price_rrc": 1200,
+                                "status": "active",
+                                "parameters": [
+                                    {"name": "цвет", "value": "черный"},
+                                ],
+                                "can_add_to_basket": True,
+                            }
+                        ],
+                    },
+                    response_only=True,
+                )
+            ],
+        ),
+        400: VALIDATION_ERROR_RESPONSE,
+        401: AUTH_REQUIRED_RESPONSE,
+    },
+)
+
+offer_detail_schema = extend_schema(
+    operation_id="offer_retrieve",
+    summary="Карточка предложения",
+    description=(
+        "Возвращает конкретное доступное к покупке предложение магазина. "
+        "Недоступные, архивные, заблокированные предложения и предложения "
+        "неактивных магазинов скрываются через 404."
+    ),
+    tags=["Products"],
+    responses={
+        200: BuyerOfferSerializer,
+        401: AUTH_REQUIRED_RESPONSE,
+        404: NOT_FOUND_RESPONSE,
+    },
+)
+
+product_offers_schema = extend_schema(
+    operation_id="product_offer_list",
+    summary="Предложения товара",
+    description=(
+        "Возвращает доступные предложения конкретного общего товара Product. "
+        "Если сам Product или его категория неактивны, endpoint возвращает 404."
+    ),
+    tags=["Products"],
+    responses={
+        200: PaginatedBuyerOfferResponseSerializer,
+        400: VALIDATION_ERROR_RESPONSE,
+        401: AUTH_REQUIRED_RESPONSE,
+        404: NOT_FOUND_RESPONSE,
+    },
+)
+
 basket_retrieve_schema = extend_schema(
     operation_id="basket_retrieve",
     summary="Получить корзину",
     description=(
-        "Возвращает позиции текущей корзины пользователя. Текущая корзина - первый "
-        "заказ пользователя в статусе basket. Если корзины нет или она пуста, "
-        "возвращается пустой массив. Оформленные заказы в ответ не попадают."
+        "Возвращает объект текущей корзины пользователя: ID basket-заказа, позиции, "
+        "суммы строк, общий total и предупреждения о недоступных предложениях. "
+        "Если корзина еще не создана, id будет null, items - пустым списком."
     ),
     tags=["Basket"],
     responses={
         200: OpenApiResponse(
-            response=OrderItemSerializer(many=True),
-            description="Позиции текущей корзины.",
+            response=BasketSerializer,
+            description="Объект текущей корзины.",
             examples=[
                 OpenApiExample(
                     "Корзина с одной позицией",
-                    value=[
-                        {
-                            "id": 1,
-                            "quantity": 2,
-                            "order": 1,
-                            "product_info": 1,
-                        }
-                    ],
+                    value={
+                        "id": 1,
+                        "state": "basket",
+                        "items": [
+                            {
+                                "id": 1,
+                                "offer_id": 10,
+                                "product_name": "Смартфон",
+                                "offer_name": "Смартфон 128GB",
+                                "shop_name": "Main shop",
+                                "unit_price": 1000,
+                                "quantity": 2,
+                                "line_total": 2000,
+                                "available_quantity": 8,
+                                "state": "basket",
+                                "warnings": [],
+                                "is_available": True,
+                            }
+                        ],
+                        "total": 2000,
+                    },
                     response_only=True,
                 ),
                 OpenApiExample(
                     "Пустая корзина",
-                    value=[],
+                    value={"id": None, "state": "basket", "items": [], "total": 0},
                     response_only=True,
                 ),
             ],
@@ -739,7 +920,7 @@ basket_add_schema = extend_schema(
     examples=[
         OpenApiExample(
             "Добавить предложение",
-            value={"product_info_id": 1, "quantity": 2},
+            value={"offer_id": 1, "quantity": 2},
             request_only=True,
         ),
     ],
@@ -753,9 +934,17 @@ basket_add_schema = extend_schema(
                     value={
                         "data": {
                             "id": 1,
+                            "offer_id": 1,
+                            "product_name": "Смартфон",
+                            "offer_name": "Смартфон 128GB",
+                            "shop_name": "Main shop",
+                            "unit_price": 1000,
                             "quantity": 2,
-                            "order": 1,
-                            "product_info": 1,
+                            "line_total": 2000,
+                            "available_quantity": 8,
+                            "state": "basket",
+                            "warnings": [],
+                            "is_available": True,
                         }
                     },
                     response_only=True,
@@ -942,12 +1131,31 @@ order_confirm_schema = extend_schema(
     ],
     responses={
         200: OpenApiResponse(
-            response=OrderConfirmResponseSerializer,
-            description="Заказ подтвержден.",
+            response=OrderDetailSerializer,
+            description="Заказ подтвержден, возвращены детали оформленного заказа.",
             examples=[
                 OpenApiExample(
                     "Заказ подтвержден",
-                    value={"status": "Order confirmed"},
+                    value={
+                        "id": 1,
+                        "user": 2,
+                        "dt": "2026-06-21T16:40:31.083167Z",
+                        "confirmed_at": "2026-06-21T16:41:00.000000Z",
+                        "state": "confirmed",
+                        "contact": 3,
+                        "cancellation_reason": "",
+                        "total_sum": 2000,
+                        "items": [
+                            {
+                                "id": 10,
+                                "order": 1,
+                                "product_info": 1,
+                                "quantity": 2,
+                                "state": "confirmed",
+                                "unit_price": 1000,
+                            }
+                        ],
+                    },
                     response_only=True,
                 )
             ],

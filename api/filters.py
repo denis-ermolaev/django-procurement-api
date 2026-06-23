@@ -1,6 +1,7 @@
 import django_filters
+from django.db.models import F, Q
 
-from .models import Product
+from .models import Product, ProductInfo
 
 
 # 1. Фильтры каталога ----
@@ -71,4 +72,56 @@ class ProductFilter(django_filters.FilterSet):
         return queryset.filter(
             productinfo__productparameter__parameter__name=param_name,
             productinfo__productparameter__value__icontains=param_value,
+        ).distinct()
+
+
+class OfferFilter(django_filters.FilterSet):
+    ## 2.1. Поиск и прямые фильтры ----
+    search = django_filters.CharFilter(method="filter_search")
+    category_id = django_filters.NumberFilter(field_name="product__category_id")
+    shop_id = django_filters.NumberFilter(field_name="shop_id")
+    price_min = django_filters.NumberFilter(field_name="price", lookup_expr="gte")
+    price_max = django_filters.NumberFilter(field_name="price", lookup_expr="lte")
+    in_stock = django_filters.BooleanFilter(method="filter_in_stock")
+    ordering = django_filters.OrderingFilter(
+        fields=(
+            ("id", "id"),
+            ("price", "price"),
+            ("quantity", "quantity"),
+        )
+    )
+
+    ## 2.2. Фильтр по характеристикам ----
+    parameter = django_filters.CharFilter(method="filter_by_parameter")
+
+    class Meta:
+        model = ProductInfo
+        fields = [
+            "search",
+            "category_id",
+            "shop_id",
+            "price_min",
+            "price_max",
+            "parameter",
+            "in_stock",
+            "ordering",
+        ]
+
+    def filter_search(self, queryset, _, value):
+        return queryset.filter(
+            Q(name__icontains=value) | Q(product__name__icontains=value)
+        )
+
+    def filter_in_stock(self, queryset, _, value):
+        if value:
+            return queryset.filter(quantity__gt=0, reserved_quantity__lt=F("quantity"))
+        return queryset
+
+    def filter_by_parameter(self, queryset, _, value):
+        if ":" not in value:
+            return queryset
+        param_name, param_value = value.split(":", 1)
+        return queryset.filter(
+            productparameter__parameter__name=param_name,
+            productparameter__value__icontains=param_value,
         ).distinct()
