@@ -1,0 +1,118 @@
+shop: Мир Мебели
+url: https://mebel-mir.example.com
+owner_email: info@mebel-mir.example.com
+categories:
+  - id: 301
+    name: Мебель для гостиной
+  - id: 302
+    name: Кухонная мебель
+  - id: 303
+    name: Спальни
+  - id: 304
+    name: Офисная мебель
+
+goods:
+  - id: 301001
+    category: 301
+    model: ikea/klippan-2-seater
+    name: Диван IKEA Klippan 2-местный (серый)
+    price: 45000
+    price_rrc: 49990
+    quantity: 8
+    parameters:
+      "Тип": диван
+      "Материал обивки": ткань
+      "Цвет": серый
+      "Макс. нагрузка (кг)": 300
+
+  - id: 301002
+    category: 301
+    model: ikea/hemnes-tv-bench
+    name: Тумба IKEA Hemnes под ТВ (белый)
+    price: 18000
+    price_rrc: 21990
+    quantity: 12
+    parameters:
+      "Тип": тумба
+      "Материал": массив сосны
+      "Цвет": белый
+      "Ящики": 2
+
+  - id: 302001
+    category: 302
+    model: ikea/kungsbacka-kitchen
+    name: Кухонный гарнитур IKEA Kungsbacka 2.4м (белый глянец)
+    price: 145000
+    price_rrc: 159990
+    quantity: 3
+    parameters:
+      "Тип": гарнитур
+      "Материал фасада": МДФ
+      "Цвет": белый глянец
+      "Ширина (м)": 2.4
+
+  - id: 302002
+    category: 302
+    model: ikea/skogsta-table
+    name: Обеденный стол IKEA Skogsta (140x78 см)
+    price: 42000
+    price_rrc: 47990
+    quantity: 6
+    parameters:
+      "Тип": стол
+      "Материал": массив акации
+      "Цвет": натуральное дерево
+      "Ширина (см)": 140
+
+  - id: 303001
+    category: 303
+    model: askona/vega-mattress
+    name: Матрас Askona Vega 160x200 (ортопедический)
+    price: 35000
+    price_rrc: 39990
+    quantity: 10
+    parameters:
+      "Тип": матрас
+      "Размер (см)": 160x200
+      "Жёсткость": средняя
+      "Высота (см)": 22
+
+  - id: 303002
+    category: 303
+    model: ikea/malm-bed-frame
+    name: Кровать IKEA Malm 160x200 (берёза)
+    price: 28000
+    price_rrc: 32990
+    quantity: 7
+    parameters:
+      "Тип": кровать
+      "Материал": ЛДСП
+      "Цвет": берёза
+      "Размер (см)": 160x200
+
+  - id: 304001
+    category: 304
+    model: ikea/markus-chair
+    name: Кресло IKEA Markus офисное (чёрное)
+    price: 25000
+    price_rrc: 29990
+    quantity: 15
+    parameters:
+      "Тип": кресло
+      "Материал обивки": сетка
+      "Цвет": чёрный
+      "Регулировка высоты": true
+
+  - id: 304002
+    category: 304
+    model: ikea/bekant-desk
+    name: Стол IKEA Bekant 160x80 (регулируемый, белый)
+    price: 55000
+    price_rrc: 59990
+    quantity: 5
+    parameters:
+      "Тип": стол
+      "Ширина (см)": 160
+      "Глубина (см)": 80
+      "Регулировка высоты": true
+      "Цвет": белый

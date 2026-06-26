@@ -1,11 +1,12 @@
 import logging
+from typing import cast
 
 from django.db import transaction
-from django.db.models import QuerySet
 from django.shortcuts import get_object_or_404
 from rest_framework.exceptions import ValidationError
 
 from api.models import Order, OrderItem, ProductInfo, User
+from api.services.orders import apply_order_item_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -34,27 +35,30 @@ def get_current_basket(user: User, *, create: bool = False) -> Order | None:
     return order
 
 
-def get_basket_items(user: User) -> QuerySet[OrderItem]:
+def get_basket_items(user: User) -> list[OrderItem]:
     order = get_current_basket(user)
     if order is None:
         logger.debug(
             "[get_basket_items] basket_list_empty user_id=%s reason=no_open_basket",
             user.pk,
         )
-        return OrderItem.objects.none()
+        return cast(list[OrderItem], [])
 
     items = (
         OrderItem.objects.filter(order=order)
         .select_related("product_info__shop", "product_info__product__category")
         .order_by("id")
     )
+    # Materialize QuerySet в память, чтобы не делать отдельный COUNT-запрос.
+    # Корзина обычно содержит мало позиций (1-20), поэтому это безопасно.
+    items_list = list(items)
     logger.debug(
         "[get_basket_items] basket_list_loaded user_id=%s order_id=%s item_count=%s",
         user.pk,
         order.pk,
-        items.count(),
+        len(items_list),
     )
-    return items
+    return items_list
 
 
 def get_basket_summary(user: User) -> dict:
@@ -106,9 +110,9 @@ def build_basket_item_payload(item: OrderItem) -> dict:
         "product_name": product_info.product.name,
         "offer_name": product_info.name,
         "shop_name": product_info.shop.name,
-        "unit_price": product_info.price,
+        "unit_price": item.unit_price or product_info.price,
         "quantity": item.quantity,
-        "line_total": item.quantity * product_info.price,
+        "line_total": item.quantity * (item.unit_price or product_info.price),
         "available_quantity": available_quantity,
         "state": item.state,
         "warnings": warnings,
@@ -125,8 +129,11 @@ def add_basket_item(user: User, *, product_info_id: int, quantity: int) -> Order
         quantity,
     )
 
+    # select_for_update — row-level блокировка для предотвращения race condition
     product_info = get_object_or_404(
-        ProductInfo.objects.select_related("shop", "product__category"),
+        ProductInfo.objects.select_for_update().select_related(
+            "shop", "product__category"
+        ),
         id=product_info_id,
         status="active",
         shop__status="active",
@@ -168,7 +175,12 @@ def add_basket_item(user: User, *, product_info_id: int, quantity: int) -> Order
         )
 
     if order is None:
-        order = get_current_basket(user, create=True)
+        try:
+            order = get_current_basket(user, create=True)
+        except Exception:
+            raise ValidationError(
+                {"order_id": "Не удалось создать корзину. Попробуйте снова."}
+            )
         assert order is not None
 
     order_item, created = OrderItem.objects.get_or_create(
@@ -177,7 +189,20 @@ def add_basket_item(user: User, *, product_info_id: int, quantity: int) -> Order
         defaults={"quantity": quantity, "state": "basket"},
     )
 
-    if not created:
+    # Заполняем снепшот цены при добавлении в корзину
+    if created:
+        apply_order_item_snapshot(order_item, product_info)
+        order_item.save(
+            update_fields=[
+                "unit_price",
+                "price_rrc_snapshot",
+                "product_name_snapshot",
+                "offer_name_snapshot",
+                "shop_name_snapshot",
+                "external_id_snapshot",
+            ]
+        )
+    else:
         order_item.quantity += quantity
         order_item.save(update_fields=["quantity"])
 
@@ -233,7 +258,19 @@ def update_basket_item_quantity(
         )
 
     order_item.quantity = quantity
-    order_item.save(update_fields=["quantity"])
+    # Обновляем снепшот цены (мог измениться пока товар был в корзине)
+    apply_order_item_snapshot(order_item, product_info)
+    order_item.save(
+        update_fields=[
+            "quantity",
+            "unit_price",
+            "price_rrc_snapshot",
+            "product_name_snapshot",
+            "offer_name_snapshot",
+            "shop_name_snapshot",
+            "external_id_snapshot",
+        ]
+    )
     logger.info(
         "[update_basket_item_quantity] basket_item_quantity_updated user_id=%s order_id=%s item_id=%s quantity=%s",
         user.pk,

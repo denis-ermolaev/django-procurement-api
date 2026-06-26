@@ -5,8 +5,10 @@ from django.test import override_settings
 from django.urls import reverse
 from rest_framework import status
 
-from api.management.email_service import send_order_confirmation
 from api.models import Contact, Order, OrderItem, User
+from api.services.email_service import (
+    send_order_confirmation,
+)
 from api.tests.base import APITestCase
 
 
@@ -27,7 +29,7 @@ class OrderAPITests(APITestCase):
         self.authenticate()
 
         with (
-            patch("api.services.orders.send_order_confirmation") as send_confirmation,
+            patch("api.services.orders.send_order_confirmation_async") as send_async,
             self.captureOnCommitCallbacks(execute=True),
         ):
             response = self.api_client.post(
@@ -52,8 +54,7 @@ class OrderAPITests(APITestCase):
         self.assertEqual(self.product_info.reserved_quantity, 2)
         self.assertEqual(response.data["id"], order.pk)
         self.assertEqual(response.data["total_sum"], 200)
-        send_confirmation.assert_called_once()
-        self.assertEqual(send_confirmation.call_args.args[0].pk, order.pk)
+        send_async.delay.assert_called_once_with(order.pk)
 
     def test_confirm_order_keeps_price_snapshot_after_offer_price_change(self) -> None:
         contact = Contact.objects.create(user=self.user, **self.contact_payload)
@@ -64,7 +65,7 @@ class OrderAPITests(APITestCase):
         self.authenticate()
 
         with (
-            patch("api.services.orders.send_order_confirmation"),
+            patch("api.services.orders.send_order_confirmation_async"),
             self.captureOnCommitCallbacks(execute=True),
         ):
             confirm_response = self.api_client.post(
@@ -164,7 +165,7 @@ class OrderAPITests(APITestCase):
         )
         self.assertEqual(forbidden_response.status_code, status.HTTP_404_NOT_FOUND)
 
-    def test_order_patch_validates_state_and_checks_ownership(self) -> None:
+    def test_order_cancel_via_dedicated_endpoint(self) -> None:
         own_order = Order.objects.create(user=self.user, state="confirmed")
         own_item = OrderItem.objects.create(
             order=own_order,
@@ -175,36 +176,24 @@ class OrderAPITests(APITestCase):
         other_order = Order.objects.create(user=self.other_user, state="confirmed")
         self.authenticate()
 
-        invalid_response = self.api_client.patch(
-            reverse("order-detail", args=[own_order.pk]),
-            {"state": "archived"},
+        # POST /orders/{id}/cancel/ — корректная отмена
+        response = self.api_client.post(
+            reverse("order-cancel", args=[own_order.pk]),
             format="json",
         )
-        basket_response = self.api_client.patch(
-            reverse("order-detail", args=[own_order.pk]),
-            {"state": "basket"},
-            format="json",
-        )
-        forbidden_response = self.api_client.patch(
-            reverse("order-detail", args=[other_order.pk]),
-            {"state": "canceled"},
-            format="json",
-        )
-        response = self.api_client.patch(
-            reverse("order-detail", args=[own_order.pk]),
-            {"state": "canceled"},
-            format="json",
-        )
-
-        self.assertEqual(invalid_response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(basket_response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(forbidden_response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["items"][0]["id"], own_item.pk)
         own_order.refresh_from_db()
         own_item.refresh_from_db()
         self.assertEqual(own_order.state, "canceled")
         self.assertEqual(own_item.state, "canceled")
+
+        # POST /orders/{id}/cancel/ — чужой заказ
+        forbidden_response = self.api_client.post(
+            reverse("order-cancel", args=[other_order.pk]),
+            format="json",
+        )
+        self.assertEqual(forbidden_response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_buyer_can_cancel_partially_canceled_order_before_processing(self) -> None:
         order = Order.objects.create(user=self.user, state="partially_canceled")
@@ -224,9 +213,8 @@ class OrderAPITests(APITestCase):
         self.product_info.save(update_fields=["reserved_quantity"])
         self.authenticate()
 
-        response = self.api_client.patch(
-            reverse("order-detail", args=[order.pk]),
-            {"state": "canceled"},
+        response = self.api_client.post(
+            reverse("order-cancel", args=[order.pk]),
             format="json",
         )
 
@@ -308,3 +296,68 @@ class OrderAPITests(APITestCase):
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(mail.outbox[0].to, ["admin@example.com"])
         self.assertIn("Email клиента: None", mail.outbox[0].body)
+
+
+class OrderCancelAPITests(APITestCase):
+    def test_cancel_order_requires_authentication(self) -> None:
+        order = Order.objects.create(user=self.user, state="confirmed")
+
+        response = self.api_client.post(
+            reverse("order-cancel", args=[order.pk]), format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_cancel_order_happy_path(self) -> None:
+        order = Order.objects.create(user=self.user, state="confirmed")
+        OrderItem.objects.create(
+            order=order, product_info=self.product_info, quantity=2, state="confirmed"
+        )
+        self.product_info.reserved_quantity = 2
+        self.product_info.save(update_fields=["reserved_quantity"])
+        self.authenticate()
+
+        response = self.api_client.post(
+            reverse("order-cancel", args=[order.pk]), format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        order.refresh_from_db()
+        self.assertEqual(order.state, "canceled")
+
+    def test_cancel_order_fails_if_already_shipped(self) -> None:
+        order = Order.objects.create(user=self.user, state="sent")
+        self.authenticate()
+
+        response = self.api_client.post(
+            reverse("order-cancel", args=[order.pk]), format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_cancel_order_fails_from_other_user(self) -> None:
+        order = Order.objects.create(user=self.other_user, state="confirmed")
+        self.authenticate()
+
+        response = self.api_client.post(
+            reverse("order-cancel", args=[order.pk]), format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_cancel_order_releases_reserved_stock(self) -> None:
+        order = Order.objects.create(user=self.user, state="confirmed")
+        OrderItem.objects.create(
+            order=order, product_info=self.product_info, quantity=2, state="confirmed"
+        )
+        self.product_info.reserved_quantity = 2
+        self.product_info.save(update_fields=["reserved_quantity"])
+        self.authenticate()
+
+        response = self.api_client.post(
+            reverse("order-cancel", args=[order.pk]), format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.product_info.refresh_from_db()
+        self.assertEqual(self.product_info.reserved_quantity, 0)

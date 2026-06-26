@@ -25,14 +25,14 @@ from api.serializers import (
     OrderConfirmSerializer,
     OrderDetailSerializer,
     OrderItemSerializer,
-    OrderUpdateSerializer,
+    PaginatedAdminOrderResponseSerializer,
     PaginatedBuyerOfferResponseSerializer,
+    PaginatedOfferResponseSerializer,
     PaginatedOrderHistoryResponseSerializer,
+    PaginatedOrderItemResponseSerializer,
     PaginatedProductResponseSerializer,
     ParameterSerializer,
-    ProductInfoSerializer,
     ProductSerializer,
-    ShopImportResultSerializer,
     ShopImportSerializer,
     ShopOfferCreateSerializer,
     ShopOfferUpdateSerializer,
@@ -40,6 +40,7 @@ from api.serializers import (
     ShopRegistrationResponseSerializer,
     ShopRegistrationSerializer,
     ShopSerializer,
+    UpdateBasketItemSerializer,
     UserSerializer,
 )
 
@@ -220,6 +221,27 @@ admin_shop_block_schema = extend_schema(
     },
 )
 
+shop_import_status_schema = extend_schema(
+    operation_id="shop_import_status",
+    summary="Статус фонового импорта прайса",
+    description="Возвращает текущий статус задачи импорта по её ID.",
+    tags=["Shops"],
+    parameters=[
+        OpenApiParameter(
+            name="pk",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.PATH,
+            description="ID задачи импорта (ImportJob).",
+        ),
+    ],
+    responses={
+        200: OpenApiTypes.OBJECT,
+        401: AUTH_REQUIRED_RESPONSE,
+        403: FORBIDDEN_RESPONSE,
+        404: NOT_FOUND_RESPONSE,
+    },
+)
+
 shop_profile_schema = extend_schema(
     operation_id="shop_profile_retrieve",
     summary="Профиль своего магазина",
@@ -251,7 +273,7 @@ shop_offer_list_schema = extend_schema(
     summary="Предложения своего магазина",
     tags=["Shops"],
     responses={
-        200: OfferSerializer(many=True),
+        200: PaginatedOfferResponseSerializer,
         401: AUTH_REQUIRED_RESPONSE,
         403: FORBIDDEN_RESPONSE,
     },
@@ -289,15 +311,24 @@ shop_import_create_schema = extend_schema(
     operation_id="shop_import_create",
     summary="Импортировать YAML-прайс магазина",
     description=(
-        "Минимальный синхронный API-импорт для поставщика. Endpoint принимает "
+        "Асинхронный импорт прайса магазина. Endpoint принимает "
         "YAML-файл multipart-полем file или YAML-строку в JSON-поле content, "
-        "проверяет структуру fail-fast и атомарно обновляет предложения по "
-        "стабильному ключу shop + external_id."
+        "запускает фоновую задачу и возвращает job_id для отслеживания статуса."
     ),
     tags=["Shops"],
     request=ShopImportSerializer,
     responses={
-        200: ShopImportResultSerializer,
+        202: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
+            description="Импорт запущен фоново.",
+            examples=[
+                OpenApiExample(
+                    "Задача создана",
+                    value={"job_id": 1, "status": "processing"},
+                    response_only=True,
+                )
+            ],
+        ),
         400: VALIDATION_ERROR_RESPONSE,
         401: AUTH_REQUIRED_RESPONSE,
         403: FORBIDDEN_RESPONSE,
@@ -309,7 +340,7 @@ shop_order_item_list_schema = extend_schema(
     summary="Позиции заказов своего магазина",
     tags=["Shops"],
     responses={
-        200: OrderItemSerializer(many=True),
+        200: PaginatedOrderItemResponseSerializer,
         401: AUTH_REQUIRED_RESPONSE,
         403: FORBIDDEN_RESPONSE,
     },
@@ -333,8 +364,31 @@ admin_user_list_schema = extend_schema(
     operation_id="admin_user_list",
     summary="Список пользователей",
     tags=["Admin"],
+    parameters=[
+        OpenApiParameter(
+            name="page",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Номер страницы. Нумерация начинается с 1.",
+        ),
+        OpenApiParameter(
+            name="page_size",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Количество пользователей на страницу. Допустимый диапазон: 1-100.",
+        ),
+        OpenApiParameter(
+            name="search",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            description="Поиск по email, имени или фамилии пользователя (регистронезависимый).",
+        ),
+    ],
     responses={
-        200: UserSerializer(many=True),
+        200: OpenApiResponse(
+            response=UserSerializer(many=True),
+            description="Постраничный список пользователей.",
+        ),
         401: AUTH_REQUIRED_RESPONSE,
         403: FORBIDDEN_RESPONSE,
     },
@@ -358,8 +412,31 @@ admin_shop_list_schema = extend_schema(
     operation_id="admin_shop_list",
     summary="Список магазинов",
     tags=["Admin"],
+    parameters=[
+        OpenApiParameter(
+            name="page",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Номер страницы. Нумерация начинается с 1.",
+        ),
+        OpenApiParameter(
+            name="page_size",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Количество магазинов на страницу. Допустимый диапазон: 1-100.",
+        ),
+        OpenApiParameter(
+            name="search",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            description="Поиск по названию магазина или email владельца (регистронезависимый).",
+        ),
+    ],
     responses={
-        200: ShopSerializer(many=True),
+        200: OpenApiResponse(
+            response=ShopSerializer(many=True),
+            description="Постраничный список магазинов.",
+        ),
         401: AUTH_REQUIRED_RESPONSE,
         403: FORBIDDEN_RESPONSE,
     },
@@ -383,8 +460,31 @@ admin_category_list_schema = extend_schema(
     operation_id="admin_category_list",
     summary="Список категорий",
     tags=["Admin"],
+    parameters=[
+        OpenApiParameter(
+            name="page",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Номер страницы. Нумерация начинается с 1.",
+        ),
+        OpenApiParameter(
+            name="page_size",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Количество категорий на страницу. Допустимый диапазон: 1-100.",
+        ),
+        OpenApiParameter(
+            name="search",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            description="Поиск по названию категории (регистронезависимый).",
+        ),
+    ],
     responses={
-        200: CategorySerializer(many=True),
+        200: OpenApiResponse(
+            response=CategorySerializer(many=True),
+            description="Постраничный список категорий.",
+        ),
         401: AUTH_REQUIRED_RESPONSE,
         403: FORBIDDEN_RESPONSE,
     },
@@ -421,8 +521,31 @@ admin_product_list_schema = extend_schema(
     operation_id="admin_product_list",
     summary="Список товаров",
     tags=["Admin"],
+    parameters=[
+        OpenApiParameter(
+            name="page",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Номер страницы. Нумерация начинается с 1.",
+        ),
+        OpenApiParameter(
+            name="page_size",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Количество товаров на страницу. Допустимый диапазон: 1-100.",
+        ),
+        OpenApiParameter(
+            name="search",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            description="Поиск по названию товара (регистронезависимый).",
+        ),
+    ],
     responses={
-        200: ProductSerializer(many=True),
+        200: OpenApiResponse(
+            response=ProductSerializer(many=True),
+            description="Постраничный список товаров.",
+        ),
         401: AUTH_REQUIRED_RESPONSE,
         403: FORBIDDEN_RESPONSE,
     },
@@ -459,8 +582,31 @@ admin_parameter_list_schema = extend_schema(
     operation_id="admin_parameter_list",
     summary="Список параметров",
     tags=["Admin"],
+    parameters=[
+        OpenApiParameter(
+            name="page",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Номер страницы. Нумерация начинается с 1.",
+        ),
+        OpenApiParameter(
+            name="page_size",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Количество параметров на страницу. Допустимый диапазон: 1-100.",
+        ),
+        OpenApiParameter(
+            name="search",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            description="Поиск по названию параметра (регистронезависимый).",
+        ),
+    ],
     responses={
-        200: ParameterSerializer(many=True),
+        200: OpenApiResponse(
+            response=ParameterSerializer(many=True),
+            description="Постраничный список параметров.",
+        ),
         401: AUTH_REQUIRED_RESPONSE,
         403: FORBIDDEN_RESPONSE,
     },
@@ -497,8 +643,31 @@ admin_offer_list_schema = extend_schema(
     operation_id="admin_offer_list",
     summary="Список предложений магазинов",
     tags=["Admin"],
+    parameters=[
+        OpenApiParameter(
+            name="page",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Номер страницы. Нумерация начинается с 1.",
+        ),
+        OpenApiParameter(
+            name="page_size",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Количество предложений на страницу. Допустимый диапазон: 1-100.",
+        ),
+        OpenApiParameter(
+            name="search",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            description="Поиск по названию предложения или товара (регистронезависимый).",
+        ),
+    ],
     responses={
-        200: OfferSerializer(many=True),
+        200: OpenApiResponse(
+            response=OfferSerializer(many=True),
+            description="Постраничный список предложений.",
+        ),
         401: AUTH_REQUIRED_RESPONSE,
         403: FORBIDDEN_RESPONSE,
     },
@@ -521,9 +690,47 @@ admin_offer_update_schema = extend_schema(
 admin_order_list_schema = extend_schema(
     operation_id="admin_order_list",
     summary="Список заказов",
+    description=(
+        "Возвращает постраничный список всех заказов в системе. "
+        "Доступно только администраторам. Поддерживает поиск по email "
+        "пользователя, ID заказа или городу доставки, а также фильтрацию "
+        "по статусу заказа."
+    ),
     tags=["Admin"],
+    parameters=[
+        OpenApiParameter(
+            name="page",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Номер страницы. Нумерация начинается с 1.",
+        ),
+        OpenApiParameter(
+            name="page_size",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Количество заказов на страницу. Допустимый диапазон: 1-100.",
+        ),
+        OpenApiParameter(
+            name="search",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            description="Поиск по email пользователя, ID заказа или городу доставки (регистронезависимый).",
+        ),
+        OpenApiParameter(
+            name="status",
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            description=(
+                "Фильтр по статусу заказа. Допустимые значения: "
+                "confirmed, processing, sent, delivered, partially_canceled, canceled."
+            ),
+        ),
+    ],
     responses={
-        200: OrderDetailSerializer(many=True),
+        200: OpenApiResponse(
+            response=PaginatedAdminOrderResponseSerializer,
+            description="Постраничный список заказов.",
+        ),
         401: AUTH_REQUIRED_RESPONSE,
         403: FORBIDDEN_RESPONSE,
     },
@@ -666,51 +873,6 @@ product_list_schema = extend_schema(
     },
 )
 
-product_detail_schema = extend_schema(
-    operation_id="product_offer_retrieve",
-    summary="Детальная информация о предложении",
-    description=(
-        "Возвращает конкретное предложение ProductInfo. Это не общий товар Product, "
-        "а предложение конкретного магазина: ссылка на товар и магазин, название "
-        "из прайса, остаток, фактическая цена и рекомендованная цена."
-    ),
-    tags=["Products"],
-    parameters=[
-        OpenApiParameter(
-            name="id",
-            type=OpenApiTypes.INT,
-            location=OpenApiParameter.PATH,
-            description="ID предложения ProductInfo.",
-        ),
-    ],
-    responses={
-        200: OpenApiResponse(
-            response=ProductInfoSerializer,
-            description="Данные предложения товара.",
-            examples=[
-                OpenApiExample(
-                    "Предложение товара",
-                    value={
-                        "id": 1,
-                        "name": "Смартфон Apple iPhone XS Max 512GB (золотистый)",
-                        "quantity": 14,
-                        "price": 110000,
-                        "price_rrc": 116990,
-                        "product": 1,
-                        "shop": 1,
-                    },
-                    response_only=True,
-                )
-            ],
-        ),
-        401: AUTH_REQUIRED_RESPONSE,
-        404: OpenApiResponse(
-            response=ErrorDetailSerializer,
-            description="Предложение с указанным id не найдено.",
-        ),
-    },
-)
-
 offer_list_schema = extend_schema(
     operation_id="offer_list",
     summary="Список доступных предложений",
@@ -836,6 +998,7 @@ offer_detail_schema = extend_schema(
     responses={
         200: BuyerOfferSerializer,
         401: AUTH_REQUIRED_RESPONSE,
+        403: FORBIDDEN_RESPONSE,
         404: NOT_FOUND_RESPONSE,
     },
 )
@@ -852,6 +1015,7 @@ product_offers_schema = extend_schema(
         200: PaginatedBuyerOfferResponseSerializer,
         400: VALIDATION_ERROR_RESPONSE,
         401: AUTH_REQUIRED_RESPONSE,
+        403: FORBIDDEN_RESPONSE,
         404: NOT_FOUND_RESPONSE,
     },
 )
@@ -903,101 +1067,7 @@ basket_retrieve_schema = extend_schema(
             ],
         ),
         401: AUTH_REQUIRED_RESPONSE,
-    },
-)
-
-basket_add_schema = extend_schema(
-    operation_id="basket_add_item",
-    summary="Добавить товар в корзину",
-    description=(
-        "Добавляет предложение ProductInfo в корзину текущего пользователя. "
-        "Если открытой корзины нет, она создается автоматически. Если такая "
-        "позиция уже есть в корзине, quantity увеличивается на переданное значение. "
-        "Итоговое количество не может превышать доступный остаток ProductInfo.quantity - reserved_quantity."
-    ),
-    tags=["Basket"],
-    request=AddToBasketSerializer,
-    examples=[
-        OpenApiExample(
-            "Добавить предложение",
-            value={"offer_id": 1, "quantity": 2},
-            request_only=True,
-        ),
-    ],
-    responses={
-        200: OpenApiResponse(
-            response=BasketItemResponseSerializer,
-            description="Созданная или обновленная позиция корзины.",
-            examples=[
-                OpenApiExample(
-                    "Позиция корзины",
-                    value={
-                        "data": {
-                            "id": 1,
-                            "offer_id": 1,
-                            "product_name": "Смартфон",
-                            "offer_name": "Смартфон 128GB",
-                            "shop_name": "Main shop",
-                            "unit_price": 1000,
-                            "quantity": 2,
-                            "line_total": 2000,
-                            "available_quantity": 8,
-                            "state": "basket",
-                            "warnings": [],
-                            "is_available": True,
-                        }
-                    },
-                    response_only=True,
-                )
-            ],
-        ),
-        400: VALIDATION_ERROR_RESPONSE,
-        401: AUTH_REQUIRED_RESPONSE,
-        404: OpenApiResponse(
-            response=ErrorDetailSerializer,
-            description="Предложение товара product_info_id не найдено.",
-        ),
-    },
-)
-
-basket_delete_schema = extend_schema(
-    operation_id="basket_delete_item",
-    summary="Удалить позицию из корзины",
-    description=(
-        "Удаляет позицию OrderItem из корзины текущего пользователя. "
-        "Основной параметр для удаления: item_id. order_id можно передать "
-        "дополнительно для строгой проверки корзины. Старое имя product_info_id "
-        "временно поддерживается как алиас item_id для обратной совместимости."
-    ),
-    tags=["Basket"],
-    parameters=[
-        OpenApiParameter(
-            name="item_id",
-            type=OpenApiTypes.INT,
-            required=True,
-            location=OpenApiParameter.QUERY,
-            description="ID позиции корзины OrderItem, которую нужно удалить.",
-        ),
-        OpenApiParameter(
-            name="product_info_id",
-            type=OpenApiTypes.INT,
-            required=False,
-            location=OpenApiParameter.QUERY,
-            description="Устаревший алиас item_id.",
-        ),
-        OpenApiParameter(
-            name="order_id",
-            type=OpenApiTypes.INT,
-            required=False,
-            location=OpenApiParameter.QUERY,
-            description="Опциональный ID заказа-корзины для дополнительной проверки.",
-        ),
-    ],
-    responses={
-        204: OpenApiResponse(description="Позиция удалена, тело ответа пустое."),
-        400: VALIDATION_ERROR_RESPONSE,
-        401: AUTH_REQUIRED_RESPONSE,
-        404: NOT_FOUND_RESPONSE,
+        403: FORBIDDEN_RESPONSE,
     },
 )
 
@@ -1043,7 +1113,8 @@ contact_create_schema = extend_schema(
     summary="Создать адрес доставки",
     description=(
         "Создает адрес доставки для текущего пользователя. Поля city, street и phone "
-        "обязательны; house, structure, building и apartment могут быть пустыми строками."
+        "обязательны; house, structure, building и apartment могут быть пустыми строками. "
+        "Ответ возвращается в обертке data."
     ),
     tags=["Contacts"],
     request=ContactSerializer,
@@ -1063,9 +1134,9 @@ contact_create_schema = extend_schema(
         ),
     ],
     responses={
-        200: OpenApiResponse(
+        201: OpenApiResponse(
             response=ContactResponseSerializer,
-            description="Созданный адрес доставки в обертке data.",
+            description="Адрес доставки создан.",
             examples=[
                 OpenApiExample(
                     "Созданный адрес",
@@ -1090,26 +1161,7 @@ contact_create_schema = extend_schema(
     },
 )
 
-contact_delete_schema = extend_schema(
-    operation_id="contact_delete",
-    summary="Удалить адрес доставки",
-    description="Удаляет адрес доставки текущего пользователя по query-параметру id.",
-    tags=["Contacts"],
-    parameters=[
-        OpenApiParameter(
-            name="id",
-            type=OpenApiTypes.INT,
-            required=True,
-            location=OpenApiParameter.QUERY,
-            description="ID адреса доставки.",
-        ),
-    ],
-    responses={
-        204: OpenApiResponse(description="Адрес удален, тело ответа пустое."),
-        401: AUTH_REQUIRED_RESPONSE,
-        404: NOT_FOUND_RESPONSE,
-    },
-)
+# contact_delete_schema удалён — удаление только через DELETE /contacts/{pk}/
 
 order_confirm_schema = extend_schema(
     operation_id="order_confirm",
@@ -1282,16 +1334,32 @@ order_retrieve_schema = extend_schema(
     },
 )
 
-order_update_schema = extend_schema(
-    operation_id="order_update",
+
+category_list_schema = extend_schema(
+    operation_id="category_list",
+    summary="Список активных категорий",
+    description=(
+        "Возвращает список активных категорий, в которых есть хотя бы одно "
+        "активное предложение от активного магазина. Категории без активных "
+        "предложений не включаются."
+    ),
+    tags=["Products"],
+    responses={
+        200: CategorySerializer(many=True),
+        401: AUTH_REQUIRED_RESPONSE,
+    },
+)
+
+order_cancel_schema = extend_schema(
+    operation_id="order_cancel",
     summary="Отменить заказ покупателем",
     description=(
-        "Покупатель может перевести свой заказ только в canceled и только до "
-        "начала обработки магазином. Произвольные статусы заказа меняются через "
-        "shop/admin endpoints."
+        "Покупатель может отменить свой заказ, если он ещё не начал "
+        "обрабатываться магазином. Переводит заказ и все его позиции в "
+        "статус canceled."
     ),
     tags=["Orders"],
-    request=OrderUpdateSerializer,
+    request=None,
     parameters=[
         OpenApiParameter(
             name="id",
@@ -1300,35 +1368,21 @@ order_update_schema = extend_schema(
             description="ID заказа текущего пользователя.",
         ),
     ],
-    examples=[
-        OpenApiExample(
-            "Отменить заказ",
-            value={"state": "canceled"},
-            request_only=True,
-        ),
-    ],
     responses={
         200: OpenApiResponse(
             response=OrderDetailSerializer,
-            description="Обновленный заказ.",
+            description="Заказ отменён.",
             examples=[
                 OpenApiExample(
-                    "Заказ после PATCH",
+                    "Отменённый заказ",
                     value={
                         "id": 1,
                         "user": 2,
                         "dt": "2026-06-21T16:40:31.083167Z",
-                        "state": "delivered",
+                        "state": "canceled",
                         "contact": 3,
-                        "total_sum": 220000,
-                        "items": [
-                            {
-                                "id": 10,
-                                "quantity": 2,
-                                "order": 1,
-                                "product_info": 1,
-                            }
-                        ],
+                        "total_sum": 0,
+                        "items": [],
                     },
                     response_only=True,
                 )
@@ -1336,6 +1390,175 @@ order_update_schema = extend_schema(
         ),
         400: VALIDATION_ERROR_RESPONSE,
         401: AUTH_REQUIRED_RESPONSE,
+        404: NOT_FOUND_RESPONSE,
+    },
+)
+
+health_check_schema = extend_schema(
+    operation_id="health_check",
+    summary="Проверка работоспособности сервиса",
+    description="Возвращает статус сервиса и подключения к базе данных. Не требует аутентификации.",
+    tags=["Health"],
+    auth=None,
+    responses={
+        200: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
+            description="Сервис работает, БД подключена.",
+            examples=[
+                OpenApiExample(
+                    "OK",
+                    value={"status": "ok", "db": "connected"},
+                    response_only=True,
+                )
+            ],
+        ),
+        503: OpenApiResponse(
+            response=OpenApiTypes.OBJECT,
+            description="БД недоступна.",
+            examples=[
+                OpenApiExample(
+                    "DB unavailable",
+                    value={"status": "ok", "db": "disconnected"},
+                    response_only=True,
+                )
+            ],
+        ),
+    },
+)
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+#        СХЕМЫ ДЛЯ BASKET И CONTACT (ранее не имели отдельных декораторов)       #
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+basket_clear_schema = extend_schema(
+    operation_id="basket_clear",
+    summary="Очистить корзину",
+    description=(
+        "Удаляет все позиции из текущей корзины пользователя. Если корзина "
+        "не создана или уже пуста, возвращает 204 без ошибки."
+    ),
+    tags=["Basket"],
+    request=None,
+    responses={
+        204: OpenApiResponse(description="Корзина очищена."),
+        401: AUTH_REQUIRED_RESPONSE,
+        403: FORBIDDEN_RESPONSE,
+    },
+)
+
+basket_item_add_schema = extend_schema(
+    operation_id="basket_item_add",
+    summary="Добавить позицию в корзину",
+    description=(
+        "Добавляет предложение (offer) в корзину текущего пользователя. "
+        "Если такое предложение уже есть в корзине, увеличивает количество. "
+        "Если корзина ещё не создана, создаёт новый basket-заказ. Проверяется "
+        "доступный остаток с учётом уже зарезервированного."
+    ),
+    tags=["Basket"],
+    request=AddToBasketSerializer,
+    responses={
+        201: OpenApiResponse(
+            response=BasketItemResponseSerializer,
+            description="Позиция добавлена в корзину.",
+        ),
+        400: VALIDATION_ERROR_RESPONSE,
+        401: AUTH_REQUIRED_RESPONSE,
+        403: FORBIDDEN_RESPONSE,
+        404: NOT_FOUND_RESPONSE,
+    },
+)
+
+basket_item_update_schema = extend_schema(
+    operation_id="basket_item_update",
+    summary="Изменить количество позиции в корзине",
+    description=(
+        "Обновляет количество указанной позиции в корзине текущего "
+        "пользователя. Позиция должна принадлежать basket-заказу пользователя. "
+        "Новое количество не должно превышать доступный остаток."
+    ),
+    tags=["Basket"],
+    request=UpdateBasketItemSerializer,
+    responses={
+        200: OpenApiResponse(
+            response=BasketItemResponseSerializer,
+            description="Количество позиции обновлено.",
+        ),
+        400: VALIDATION_ERROR_RESPONSE,
+        401: AUTH_REQUIRED_RESPONSE,
+        403: FORBIDDEN_RESPONSE,
+        404: NOT_FOUND_RESPONSE,
+    },
+)
+
+basket_item_delete_schema = extend_schema(
+    operation_id="basket_item_delete",
+    summary="Удалить позицию из корзины",
+    description=(
+        "Удаляет указанную позицию из корзины текущего пользователя. "
+        "Позиция должна принадлежать basket-заказу пользователя."
+    ),
+    tags=["Basket"],
+    request=None,
+    responses={
+        204: OpenApiResponse(description="Позиция удалена из корзины."),
+        401: AUTH_REQUIRED_RESPONSE,
+        403: FORBIDDEN_RESPONSE,
+        404: NOT_FOUND_RESPONSE,
+    },
+)
+
+contact_detail_schema = extend_schema(
+    operation_id="contact_retrieve",
+    summary="Получить адрес доставки",
+    description=(
+        "Возвращает адрес доставки текущего пользователя по ID в обертке data. "
+        "Адрес должен принадлежать текущему пользователю."
+    ),
+    tags=["Contacts"],
+    responses={
+        200: OpenApiResponse(
+            response=ContactResponseSerializer,
+            description="Адрес доставки в обертке data.",
+        ),
+        401: AUTH_REQUIRED_RESPONSE,
+        403: FORBIDDEN_RESPONSE,
+        404: NOT_FOUND_RESPONSE,
+    },
+)
+
+contact_update_schema = extend_schema(
+    operation_id="contact_update",
+    summary="Обновить адрес доставки",
+    description="Обновляет адрес доставки текущего пользователя. Все поля опциональны.",
+    tags=["Contacts"],
+    request=ContactSerializer,
+    responses={
+        200: OpenApiResponse(
+            response=ContactSerializer,
+            description="Обновлённый адрес доставки.",
+        ),
+        400: VALIDATION_ERROR_RESPONSE,
+        401: AUTH_REQUIRED_RESPONSE,
+        403: FORBIDDEN_RESPONSE,
+        404: NOT_FOUND_RESPONSE,
+    },
+)
+
+# ---------------------------------------------------------------------------- #
+
+contact_delete_schema = extend_schema(
+    operation_id="contact_delete",
+    summary="Удалить адрес доставки",
+    description=(
+        "Удаляет адрес доставки текущего пользователя. Если адрес используется "
+        "в оформленных заказах (не корзинах), выполняется soft-delete: "
+        "поле is_deleted устанавливается в True, сам контакт остаётся в базе."
+    ),
+    tags=["Contacts"],
+    responses={
+        204: OpenApiResponse(description="Адрес доставки удалён."),
+        401: AUTH_REQUIRED_RESPONSE,
+        403: FORBIDDEN_RESPONSE,
         404: NOT_FOUND_RESPONSE,
     },
 )

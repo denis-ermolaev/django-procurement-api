@@ -1,0 +1,117 @@
+shop: СпортМастер
+url: https://sportmaster.example.com
+owner_email: shop@sportmaster.example.com
+categories:
+  - id: 401
+    name: Фитнес-тренажёры
+  - id: 402
+    name: Спортивная одежда
+  - id: 403
+    name: Туризм и кемпинг
+  - id: 404
+    name: Велосипеды
+
+goods:
+  - id: 401001
+    category: 401
+    model: housefit/ht-9115e
+    name: Беговая дорожка HouseFit HT-9115E (электрическая)
+    price: 72000
+    price_rrc: 79990
+    quantity: 5
+    parameters:
+      "Тип": беговая дорожка
+      "Складная": true
+      "Макс. скорость (км/ч)": 16
+      "Мощность (Вт)": 1800
+
+  - id: 401002
+    category: 401
+    model: bodycraft/f660
+    name: Эллиптический тренажёр BodyCraft F660
+    price: 110000
+    price_rrc: 124990
+    quantity: 3
+    parameters:
+      "Тип": эллиптический
+      "Маховик (кг)": 14
+      "Уровни нагрузки": 24
+      "Пульсометр": true
+
+  - id: 402001
+    category: 402
+    model: nike/dri-fit-t-shirt
+    name: Футболка Nike Dri-FIT (синяя, M)
+    price: 3500
+    price_rrc: 3990
+    quantity: 50
+    parameters:
+      "Тип": футболка
+      "Материал": полиэстер
+      "Размер": M
+      "Цвет": синий
+
+  - id: 402002
+    category: 402
+    model: adidas/climalite-leggings
+    name: Легинсы Adidas Climalite (чёрные, S)
+    price: 5500
+    price_rrc: 6490
+    quantity: 30
+    parameters:
+      "Тип": леггинсы
+      "Материал": полиэстер+эластан
+      "Размер": S
+      "Цвет": чёрный
+
+  - id: 403001
+    category: 403
+    model: tramp/extreme-tent
+    name: Палатка Tramp Extreme 3 (трёхместная)
+    price: 18000
+    price_rrc: 21990
+    quantity: 8
+    parameters:
+      "Тип": палатка
+      "Вместимость": 3
+      "Вес (кг)": 4.2
+      "Водостойкость (мм)": 5000
+
+  - id: 403002
+    category: 403
+    model: deuter/aircontact-65
+    name: Рюкзак Deuter Aircontact 65+10 (синий)
+    price: 29000
+    price_rrc: 32990
+    quantity: 6
+    parameters:
+      "Тип": рюкзак
+      "Объём (л)": 65
+      "Вес (кг)": 2.6
+      "Цвет": синий
+
+  - id: 404001
+    category: 404
+    model: merida/big-nine-400
+    name: Горный велосипед Merida Big Nine 400 (29")
+    price: 85000
+    price_rrc: 94990
+    quantity: 4
+    parameters:
+      "Тип": горный
+      "Рама": алюминий
+      "Колёса (дюйм)": 29
+      "Скорости": 30
+
+  - id: 404002
+    category: 404
+    model: giant/escape-3
+    name: Городской велосипед Giant Escape 3 (28")
+    price: 45000
+    price_rrc: 49990
+    quantity: 7
+    parameters:
+      "Тип": городской
+      "Рама": алюминий
+      "Колёса (дюйм)": 28
+      "Скорости": 21

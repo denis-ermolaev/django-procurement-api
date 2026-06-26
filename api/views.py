@@ -1,4 +1,6 @@
-from drf_spectacular.utils import extend_schema
+import logging
+
+from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -7,6 +9,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from api.models import ImportJob, Shop
 from api.openapi import (
     admin_category_create_schema,
     admin_category_list_schema,
@@ -28,22 +31,28 @@ from api.openapi import (
     admin_shop_update_schema,
     admin_user_list_schema,
     admin_user_update_schema,
-    basket_add_schema,
-    basket_delete_schema,
+    basket_clear_schema,
+    basket_item_add_schema,
+    basket_item_delete_schema,
+    basket_item_update_schema,
     basket_retrieve_schema,
+    category_list_schema,
     contact_create_schema,
     contact_delete_schema,
+    contact_detail_schema,
     contact_list_schema,
+    contact_update_schema,
+    health_check_schema,
     offer_detail_schema,
     offer_list_schema,
+    order_cancel_schema,
     order_confirm_schema,
     order_history_schema,
     order_retrieve_schema,
-    order_update_schema,
-    product_detail_schema,
     product_list_schema,
     product_offers_schema,
     shop_import_create_schema,
+    shop_import_status_schema,
     shop_offer_create_schema,
     shop_offer_list_schema,
     shop_offer_update_schema,
@@ -61,6 +70,11 @@ from api.services import orders as order_service
 from api.services import products as product_service
 from api.services import shop_data as shop_data_service
 from api.services import shops as shop_service
+from api.throttles import (
+    ConfirmOrderRateThrottle,
+    ImportRateThrottle,
+    ShopRegisterRateThrottle,
+)
 
 from .serializers import (
     AddToBasketSerializer,
@@ -74,17 +88,13 @@ from .serializers import (
     BuyerOfferSerializer,
     CategorySerializer,
     ContactSerializer,
-    DeleteBasketItemSerializer,
     OfferSerializer,
     OrderConfirmSerializer,
     OrderDetailSerializer,
     OrderHistorySerializer,
     OrderItemSerializer,
-    OrderUpdateSerializer,
     ParameterSerializer,
-    ProductInfoSerializer,
     ProductSerializer,
-    ShopImportResultSerializer,
     ShopImportSerializer,
     ShopOfferCreateSerializer,
     ShopOfferUpdateSerializer,
@@ -96,6 +106,8 @@ from .serializers import (
     UserSerializer,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class DefaultPagination(PageNumberPagination):
     page_size = 10
@@ -103,9 +115,35 @@ class DefaultPagination(PageNumberPagination):
     max_page_size = 100
 
 
+# 1. Health-check ----
+class HealthCheckView(APIView):
+    """Проверка работоспособности сервиса."""
+
+    permission_classes = [AllowAny]
+
+    @health_check_schema
+    def get(self, request: Request) -> Response:
+        from django.db import connection
+        from django.db.utils import OperationalError
+
+        db_status = "connected"
+        try:
+            connection.ensure_connection()
+        except OperationalError:
+            db_status = "disconnected"
+
+        status_code = (
+            status.HTTP_200_OK
+            if db_status == "connected"
+            else status.HTTP_503_SERVICE_UNAVAILABLE
+        )
+        return Response({"status": "ok", "db": db_status}, status=status_code)
+
+
 # 2. Магазины ----
 class ShopRegistrationView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [ShopRegisterRateThrottle]
     serializer_class = ShopRegistrationSerializer
 
     @shop_register_schema
@@ -166,6 +204,8 @@ class ShopProfileView(APIView):
 
 
 class ShopOfferListCreateView(APIView):
+    serializer_class = OfferSerializer
+
     def get_permissions(self):
         if self.request.method == "GET":
             return [IsShop()]
@@ -175,8 +215,10 @@ class ShopOfferListCreateView(APIView):
     ## 2.6. Получить предложения магазина ----
     def get(self, request: Request):
         offers = shop_service.get_shop_offers(request.user)
-        serializer = OfferSerializer(offers, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        paginator = DefaultPagination()
+        page = paginator.paginate_queryset(offers, request)
+        serializer = self.serializer_class(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
     @shop_offer_create_schema
     ## 2.7. Создать предложение магазина ----
@@ -207,9 +249,10 @@ class ShopImportView(APIView):
     permission_classes = [IsActiveShop]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     serializer_class = ShopImportSerializer
+    throttle_classes = [ImportRateThrottle]
 
     @shop_import_create_schema
-    ## 2.9. Импортировать прайс магазина ----
+    ## 2.9. Импортировать прайс магазина (фоново через RQ) ----
     def post(self, request: Request):
         serializer = self.serializer_class(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -218,20 +261,60 @@ class ShopImportView(APIView):
         if uploaded_file is not None:
             content = uploaded_file.read().decode("utf-8")
 
-        result = shop_data_service.import_shop_data(request.user, content=content)
-        response_serializer = ShopImportResultSerializer(result)
-        return Response(response_serializer.data, status=status.HTTP_200_OK)
+        shop = Shop.objects.get(owner=request.user)
+        import_job = ImportJob.objects.create(shop=shop, status="processing")
+
+        shop_data_service.import_shop_data_async.delay(
+            user_id=request.user.pk,
+            import_job_id=import_job.pk,
+            content=content,
+        )
+
+        logger.info(
+            "[ShopImportView] shop_import_started_async user_id=%s job_id=%s",
+            request.user.pk,
+            import_job.pk,
+        )
+        return Response(
+            {"job_id": import_job.pk, "status": "processing"},
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
+class ShopImportStatusView(APIView):
+    """Проверка статуса фонового импорта прайса."""
+
+    permission_classes = [IsShop]
+
+    @shop_import_status_schema
+    def get(self, request: Request, pk: int):
+        job = get_object_or_404(ImportJob, pk=pk, shop__owner=request.user)
+        error_log = job.error_log if job.status == "failed" else ""
+        return Response(
+            {
+                "id": job.pk,
+                "status": job.status,
+                "created_at": job.created_at,
+                "completed_at": job.completed_at,
+                "stats": job.stats,
+                "error_log": error_log,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class ShopOrderItemListView(APIView):
     permission_classes = [IsShop]
+    serializer_class = OrderItemSerializer
 
     @shop_order_item_list_schema
     ## 2.10. Получить позиции заказов магазина ----
     def get(self, request: Request):
         items = order_service.get_shop_order_items(request.user)
-        serializer = OrderItemSerializer(items, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        paginator = DefaultPagination()
+        page = paginator.paginate_queryset(items, request)
+        serializer = self.serializer_class(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
 
 class ShopOrderItemDetailView(APIView):
@@ -250,6 +333,19 @@ class ShopOrderItemDetailView(APIView):
         return Response(OrderItemSerializer(item).data, status=status.HTTP_200_OK)
 
 
+# 2. Справочники ----
+class CategoryListView(APIView):
+    """Список активных категорий."""
+
+    serializer_class = CategorySerializer
+
+    @category_list_schema
+    def get(self, request: Request):
+        queryset = product_service.get_active_categories()
+        serializer = self.serializer_class(queryset, many=True)
+        return Response(serializer.data)
+
+
 # 3. Каталог товаров ----
 class ProductListView(APIView):
     """
@@ -258,18 +354,13 @@ class ProductListView(APIView):
 
     serializer_class = ProductSerializer
 
-    class Pagination(PageNumberPagination):
-        page_size = 5
-        page_size_query_param = "page_size"
-        max_page_size = 100
-
     @product_list_schema
     ## 2.1. Список продуктов ----
     def get(self, request: Request):
         queryset = product_service.get_filtered_products(
             request.user, request.query_params
         )
-        paginator = self.Pagination()
+        paginator = DefaultPagination()
         page = paginator.paginate_queryset(queryset, request)
         product_service.log_product_page_loaded(
             request.user,
@@ -283,11 +374,6 @@ class ProductListView(APIView):
 class OfferListView(APIView):
     serializer_class = BuyerOfferSerializer
 
-    class Pagination(PageNumberPagination):
-        page_size = 10
-        page_size_query_param = "page_size"
-        max_page_size = 100
-
     @offer_list_schema
     ## 2.2. Список предложений ----
     def get(self, request: Request):
@@ -295,7 +381,7 @@ class OfferListView(APIView):
             request.user,
             request.query_params,
         )
-        paginator = self.Pagination()
+        paginator = DefaultPagination()
         page = paginator.paginate_queryset(queryset, request)
         product_service.log_offer_page_loaded(
             request.user,
@@ -309,11 +395,6 @@ class OfferListView(APIView):
 class ProductOffersView(APIView):
     serializer_class = BuyerOfferSerializer
 
-    class Pagination(PageNumberPagination):
-        page_size = 10
-        page_size_query_param = "page_size"
-        max_page_size = 100
-
     @product_offers_schema
     ## 2.3. Список предложений товара ----
     def get(self, request: Request, pk: int):
@@ -322,7 +403,7 @@ class ProductOffersView(APIView):
             request.query_params,
             product_id=pk,
         )
-        paginator = self.Pagination()
+        paginator = DefaultPagination()
         page = paginator.paginate_queryset(queryset, request)
         product_service.log_offer_page_loaded(
             request.user,
@@ -345,18 +426,6 @@ class OfferDetailView(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-## 2.2. Детальная информация о предложении ----
-class ProductDetailView(APIView):
-    serializer_class = ProductInfoSerializer
-
-    @product_detail_schema
-    ## 2.2. Получить предложение ----
-    def get(self, _, pk):
-        product_info = product_service.get_product_info(pk)
-        serializer = ProductInfoSerializer(product_info)
-        return Response(serializer.data)
-
-
 # 3. Корзина ----
 class BasketView(APIView):
     """
@@ -374,47 +443,10 @@ class BasketView(APIView):
         )
         return Response(data=serializer.data, status=status.HTTP_200_OK)
 
-    @basket_add_schema
-    ## 3.2. Добавить товар в корзину ----
-    def post(self, request: Request):
-        serializer = AddToBasketSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        order_item = basket_service.add_basket_item(
-            request.user,
-            product_info_id=serializer.validated_data["offer_id"],
-            quantity=serializer.validated_data["quantity"],
-        )
-        response_serializer = BasketItemSummarySerializer(
-            basket_service.build_basket_item_payload(order_item)
-        )
-
-        return Response(
-            data={
-                "data": response_serializer.data,
-            },
-            status=status.HTTP_200_OK,
-        )
-
-    @basket_delete_schema
-    ## 3.3. Удалить товар из корзины ----
+    ## 3.3. Очистить корзину ----
+    @basket_clear_schema
     def delete(self, request: Request):
-        serializer = DeleteBasketItemSerializer(data=request.query_params)
-        if request.query_params:
-            serializer.is_valid(raise_exception=True)
-            order_id = serializer.validated_data.get("order_id")
-            item_id = (
-                serializer.validated_data.get("item_id")
-                or serializer.validated_data["product_info_id"]
-            )
-            basket_service.delete_basket_item(
-                request.user,
-                item_id=item_id,
-                order_id=order_id,
-            )
-        else:
-            basket_service.clear_basket(request.user)
-
+        basket_service.clear_basket(request.user)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -423,6 +455,7 @@ class BasketItemsView(APIView):
     serializer_class = AddToBasketSerializer
 
     ## 3.4. Добавить позицию корзины ----
+    @basket_item_add_schema
     def post(self, request: Request):
         serializer = AddToBasketSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -445,6 +478,7 @@ class BasketItemDetailView(APIView):
     serializer_class = UpdateBasketItemSerializer
 
     ## 3.5. Изменить позицию корзины ----
+    @basket_item_update_schema
     def patch(self, request: Request, pk: int):
         serializer = UpdateBasketItemSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -462,6 +496,7 @@ class BasketItemDetailView(APIView):
         )
 
     ## 3.6. Удалить позицию корзины ----
+    @basket_item_delete_schema
     def delete(self, request: Request, pk: int):
         basket_service.delete_basket_item(request.user, item_id=pk)
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -486,7 +521,7 @@ class ContactView(APIView):
             data={
                 "data": serializer.data,
             },
-            status=200,
+            status=status.HTTP_200_OK,
         )
 
     @contact_create_schema
@@ -505,16 +540,8 @@ class ContactView(APIView):
             data={
                 "data": serializer.data,
             },
-            status=200,
+            status=status.HTTP_201_CREATED,
         )
-
-    @contact_delete_schema
-    ## 4.3. Удалить адрес доставки ----
-    def delete(self, request: Request):
-        contact_id = request.GET.get("id")
-        contact_service.delete_contact(request.user, contact_id)
-
-        return Response(status=204)
 
 
 class ContactDetailView(APIView):
@@ -522,12 +549,14 @@ class ContactDetailView(APIView):
     serializer_class = ContactSerializer
 
     ## 4.4. Получить адрес доставки ----
+    @contact_detail_schema
     def get(self, request: Request, pk: int):
         contact = contact_service.get_user_contact(request.user, pk)
         serializer = self.serializer_class(contact)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response({"data": serializer.data}, status=status.HTTP_200_OK)
 
     ## 4.5. Обновить адрес доставки ----
+    @contact_update_schema
     def patch(self, request: Request, pk: int):
         serializer = self.serializer_class(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -539,14 +568,10 @@ class ContactDetailView(APIView):
         return Response(self.serializer_class(contact).data, status=status.HTTP_200_OK)
 
     ## 4.6. Удалить адрес доставки ----
+    @contact_delete_schema
     def delete(self, request: Request, pk: int):
         contact_service.delete_contact(request.user, pk)
         return Response(status=status.HTTP_204_NO_CONTENT)
-
-
-@extend_schema(exclude=True)
-class LegacyContactView(ContactView):
-    pass
 
 
 # 5. Подтверждение заказа (изменение его статуса) ----
@@ -556,6 +581,7 @@ class OrderConfirmView(APIView):
     """
 
     permission_classes = [IsBuyer]
+    throttle_classes = [ConfirmOrderRateThrottle]
 
     @order_confirm_schema
     ## 5.1. Подтвердить заказ ----
@@ -581,15 +607,10 @@ class OrderListView(APIView):
 
     permission_classes = [IsBuyer]
 
-    class Pagination(PageNumberPagination):
-        page_size = 5
-        page_size_query_param = "page_size"
-        max_page_size = 100
-
     @order_history_schema
     ## 6.1. Получить историю заказов ----
     def get(self, request: Request):
-        pagination = self.Pagination()
+        pagination = DefaultPagination()
         orders = order_service.get_order_history(request.user)
         queryset = pagination.paginate_queryset(queryset=orders, request=request)
         serializer = OrderHistorySerializer(queryset, many=True)
@@ -608,17 +629,18 @@ class OrderDetailView(APIView):
         serializer = self.serializer_class(order)
         return Response(serializer.data)
 
-    @order_update_schema
-    ## 7.2. Обновить заказ ----
-    def patch(self, request, pk):
+
+# 7.3. Отменить заказ покупателем ----
+class OrderCancelView(APIView):
+    permission_classes = [IsBuyer]
+    serializer_class = OrderDetailSerializer
+
+    @order_cancel_schema
+    def post(self, request: Request, pk: int):
         order = order_service.get_user_order(request.user, pk)
-        serializer = OrderUpdateSerializer(order, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        order = order_service.update_order_state(
-            order,
-            serializer.validated_data["state"],
-        )
-        return Response(self.serializer_class(order).data, status=200)
+        order = order_service.cancel_order_by_buyer(order)
+        serializer = self.serializer_class(order)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 # 8. Администрирование ----
@@ -628,8 +650,11 @@ class AdminUserListView(APIView):
     @admin_user_list_schema
     ## 8.1. Получить пользователей ----
     def get(self, request: Request):
+        search = request.query_params.get("search")
         pagination = DefaultPagination()
-        page = pagination.paginate_queryset(admin_service.get_all_users(), request)
+        page = pagination.paginate_queryset(
+            admin_service.get_all_users(search=search), request
+        )
         serializer = UserSerializer(page, many=True)
         return pagination.get_paginated_response(serializer.data)
 
@@ -653,8 +678,11 @@ class AdminShopListView(APIView):
     @admin_shop_list_schema
     ## 8.3. Получить магазины ----
     def get(self, request: Request):
+        search = request.query_params.get("search")
         pagination = DefaultPagination()
-        page = pagination.paginate_queryset(shop_service.get_all_shops(), request)
+        page = pagination.paginate_queryset(
+            shop_service.get_all_shops(search=search), request
+        )
         serializer = ShopSerializer(page, many=True)
         return pagination.get_paginated_response(serializer.data)
 
@@ -677,8 +705,11 @@ class AdminCategoryListCreateView(APIView):
     @admin_category_list_schema
     ## 8.5. Получить категории ----
     def get(self, request: Request):
+        search = request.query_params.get("search")
         pagination = DefaultPagination()
-        page = pagination.paginate_queryset(admin_service.get_all_categories(), request)
+        page = pagination.paginate_queryset(
+            admin_service.get_all_categories(search=search), request
+        )
         serializer = CategorySerializer(page, many=True)
         return pagination.get_paginated_response(serializer.data)
 
@@ -711,8 +742,11 @@ class AdminProductListCreateView(APIView):
     @admin_product_list_schema
     ## 8.8. Получить товары ----
     def get(self, request: Request):
+        search = request.query_params.get("search")
         pagination = DefaultPagination()
-        page = pagination.paginate_queryset(admin_service.get_all_products(), request)
+        page = pagination.paginate_queryset(
+            admin_service.get_all_products(search=search), request
+        )
         serializer = ProductSerializer(page, many=True)
         return pagination.get_paginated_response(serializer.data)
 
@@ -743,8 +777,11 @@ class AdminParameterListCreateView(APIView):
     @admin_parameter_list_schema
     ## 8.11. Получить параметры ----
     def get(self, request: Request):
+        search = request.query_params.get("search")
         pagination = DefaultPagination()
-        page = pagination.paginate_queryset(admin_service.get_all_parameters(), request)
+        page = pagination.paginate_queryset(
+            admin_service.get_all_parameters(search=search), request
+        )
         serializer = ParameterSerializer(page, many=True)
         return pagination.get_paginated_response(serializer.data)
 
@@ -777,8 +814,11 @@ class AdminOfferListView(APIView):
     @admin_offer_list_schema
     ## 8.14. Получить предложения ----
     def get(self, request: Request):
+        search = request.query_params.get("search")
         pagination = DefaultPagination()
-        page = pagination.paginate_queryset(shop_service.get_all_offers(), request)
+        page = pagination.paginate_queryset(
+            shop_service.get_all_offers(search=search), request
+        )
         serializer = OfferSerializer(page, many=True)
         return pagination.get_paginated_response(serializer.data)
 
@@ -799,10 +839,14 @@ class AdminOrderListView(APIView):
     permission_classes = [IsAdminUserType]
 
     @admin_order_list_schema
-    ## 8.16. Получить заказы ----
+    ## 8.16. Получить заказы (с фильтрацией по статусу) ----
     def get(self, request: Request):
+        search = request.query_params.get("search")
+        status = request.query_params.get("status")
         pagination = DefaultPagination()
-        page = pagination.paginate_queryset(order_service.get_all_orders(), request)
+        page = pagination.paginate_queryset(
+            order_service.get_all_orders(search=search, status=status), request
+        )
         serializer = OrderDetailSerializer(page, many=True)
         return pagination.get_paginated_response(serializer.data)
 

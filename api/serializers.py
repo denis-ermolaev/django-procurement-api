@@ -26,7 +26,6 @@ from .models import (
 ORDER_UPDATE_STATE_CHOICES = tuple(
     (state, label) for state, label in STATE_CHOICES if state != "basket"
 )
-BUYER_ORDER_UPDATE_STATE_CHOICES = (("canceled", "Отменен"),)
 SHOP_OFFER_STATUS_CHOICES = tuple(
     (state, label)
     for state, label in PRODUCT_INFO_STATUS_CHOICES
@@ -42,7 +41,29 @@ ADMIN_ORDER_ITEM_STATE_CHOICES = tuple(
 )
 
 
-# 2. Сериализаторы пользователей ----
+# 2. Базовый миксин валидации предложений ----
+class OfferValidationMixin:
+    """Базовый миксин с валидацией полей quantity, price, price_rrc для предложений.
+
+    Устраняет дублирование проверок между ShopOfferCreateSerializer,
+    ShopOfferUpdateSerializer и AdminOfferUpdateSerializer.
+    """
+
+    def validate_offer_fields(self, attrs: dict) -> dict:
+        if "price" in attrs and attrs["price"] <= 0:
+            raise serializers.ValidationError({"price": "Цена должна быть больше 0."})
+        if "price_rrc" in attrs and attrs["price_rrc"] < 0:
+            raise serializers.ValidationError(
+                {"price_rrc": "Рекомендованная цена не может быть отрицательной."}
+            )
+        if "quantity" in attrs and attrs["quantity"] < 0:
+            raise serializers.ValidationError(
+                {"quantity": "Остаток не может быть отрицательным."}
+            )
+        return attrs
+
+
+# 3. Сериализаторы пользователей ----
 class UserCreateSerializer(BaseUserCreateSerializer):
     class Meta(BaseUserCreateSerializer.Meta):
         model = User
@@ -331,12 +352,10 @@ class BuyerOfferSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(OfferParameterSerializer(many=True))
     def get_parameters(self, obj: ProductInfo) -> list[dict[str, str]]:
+        # Используем Prefetch из queryset — избегаем N+1 запрос.
+        # productparameter_set — обратная связь Django ORM, известна mypy через django-stubs
         parameters: list[ProductParameter] = list(
-            ProductParameter.objects.filter(product_info=obj)
-            .select_related("parameter")
-            .order_by(
-                "parameter__name",
-            )
+            obj.productparameter_set.all().select_related("parameter")  # type: ignore[attr-defined]
         )
         return [
             {"name": item.parameter.name, "value": item.value} for item in parameters
@@ -389,7 +408,7 @@ class OfferSerializer(serializers.ModelSerializer):
         return max(obj.quantity - obj.reserved_quantity, 0)
 
 
-class ShopOfferCreateSerializer(serializers.ModelSerializer):
+class ShopOfferCreateSerializer(serializers.ModelSerializer, OfferValidationMixin):
     quantity = serializers.IntegerField(
         min_value=0,
         error_messages={"min_value": "Остаток не может быть отрицательным."},
@@ -435,20 +454,10 @@ class ShopOfferCreateSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
-        if attrs["price"] <= 0:
-            raise serializers.ValidationError({"price": "Цена должна быть больше 0."})
-        if attrs.get("price_rrc", 0) < 0:
-            raise serializers.ValidationError(
-                {"price_rrc": "Рекомендованная цена не может быть отрицательной."}
-            )
-        if attrs["quantity"] < 0:
-            raise serializers.ValidationError(
-                {"quantity": "Остаток не может быть отрицательным."}
-            )
-        return attrs
+        return self.validate_offer_fields(attrs)
 
 
-class ShopOfferUpdateSerializer(serializers.ModelSerializer):
+class ShopOfferUpdateSerializer(serializers.ModelSerializer, OfferValidationMixin):
     quantity = serializers.IntegerField(
         min_value=0,
         required=False,
@@ -493,17 +502,7 @@ class ShopOfferUpdateSerializer(serializers.ModelSerializer):
         }
 
     def validate(self, attrs):
-        if "price" in attrs and attrs["price"] <= 0:
-            raise serializers.ValidationError({"price": "Цена должна быть больше 0."})
-        if "price_rrc" in attrs and attrs["price_rrc"] < 0:
-            raise serializers.ValidationError(
-                {"price_rrc": "Рекомендованная цена не может быть отрицательной."}
-            )
-        if "quantity" in attrs and attrs["quantity"] < 0:
-            raise serializers.ValidationError(
-                {"quantity": "Остаток не может быть отрицательным."}
-            )
-        return attrs
+        return self.validate_offer_fields(attrs)
 
 
 class ParameterSerializer(serializers.ModelSerializer):
@@ -601,8 +600,11 @@ class OrderDetailSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(OpenApiTypes.INT)
     def get_total_sum(self, obj: Order) -> int:
+        items: list[OrderItem] = list(
+            OrderItem.objects.filter(order=obj).select_related("product_info")
+        )
         total = 0
-        for item in OrderItem.objects.filter(order=obj).select_related("product_info"):
+        for item in items:
             unit_price = item.unit_price or item.product_info.price
             total += item.quantity * unit_price
         return total
@@ -711,22 +713,14 @@ class OrderHistorySerializer(serializers.ModelSerializer):
 
     @extend_schema_field(OpenApiTypes.INT)
     def get_total_sum(self, obj: Order) -> int:
+        items: list[OrderItem] = list(
+            OrderItem.objects.filter(order=obj).select_related("product_info")
+        )
         total = 0
-        for item in OrderItem.objects.filter(order=obj).select_related("product_info"):
+        for item in items:
             unit_price = item.unit_price or item.product_info.price
             total += item.quantity * unit_price
         return total
-
-
-class OrderUpdateSerializer(serializers.ModelSerializer):
-    state = serializers.ChoiceField(
-        choices=BUYER_ORDER_UPDATE_STATE_CHOICES,
-        help_text="Покупатель может только отменить заказ до начала обработки.",
-    )
-
-    class Meta:
-        model = Order
-        fields = ["state"]
 
 
 class AdminOrderUpdateSerializer(serializers.ModelSerializer):
@@ -807,7 +801,7 @@ class AdminShopUpdateSerializer(serializers.ModelSerializer):
         }
 
 
-class AdminOfferUpdateSerializer(serializers.ModelSerializer):
+class AdminOfferUpdateSerializer(serializers.ModelSerializer, OfferValidationMixin):
     quantity = serializers.IntegerField(
         min_value=0,
         required=False,
@@ -848,20 +842,46 @@ class AdminOfferUpdateSerializer(serializers.ModelSerializer):
         }
 
     def validate(self, attrs):
-        if "price" in attrs and attrs["price"] <= 0:
-            raise serializers.ValidationError({"price": "Цена должна быть больше 0."})
-        if "price_rrc" in attrs and attrs["price_rrc"] < 0:
-            raise serializers.ValidationError(
-                {"price_rrc": "Рекомендованная цена не может быть отрицательной."}
-            )
-        if "quantity" in attrs and attrs["quantity"] < 0:
-            raise serializers.ValidationError(
-                {"quantity": "Остаток не может быть отрицательным."}
-            )
-        return attrs
+        return self.validate_offer_fields(attrs)
 
 
 # 8. Сериализаторы ответов ----
+
+
+class PaginatedOfferResponseSerializer(serializers.Serializer):
+    count = serializers.IntegerField(
+        read_only=True, help_text="Общее количество предложений магазина."
+    )
+    next = serializers.URLField(
+        allow_null=True,
+        read_only=True,
+        help_text="URL следующей страницы или null, если следующей страницы нет.",
+    )
+    previous = serializers.URLField(
+        allow_null=True,
+        read_only=True,
+        help_text="URL предыдущей страницы или null, если предыдущей страницы нет.",
+    )
+    results = OfferSerializer(many=True, read_only=True)
+
+
+class PaginatedOrderItemResponseSerializer(serializers.Serializer):
+    count = serializers.IntegerField(
+        read_only=True, help_text="Общее количество позиций заказов."
+    )
+    next = serializers.URLField(
+        allow_null=True,
+        read_only=True,
+        help_text="URL следующей страницы или null, если следующей страницы нет.",
+    )
+    previous = serializers.URLField(
+        allow_null=True,
+        read_only=True,
+        help_text="URL предыдущей страницы или null, если предыдущей страницы нет.",
+    )
+    results = OrderItemSerializer(many=True, read_only=True)
+
+
 class PaginatedProductResponseSerializer(serializers.Serializer):
     count = serializers.IntegerField(
         read_only=True, help_text="Общее количество товаров."
@@ -911,6 +931,23 @@ class PaginatedOrderHistoryResponseSerializer(serializers.Serializer):
         help_text="URL предыдущей страницы или null, если предыдущей страницы нет.",
     )
     results = OrderHistorySerializer(many=True, read_only=True)
+
+
+class PaginatedAdminOrderResponseSerializer(serializers.Serializer):
+    count = serializers.IntegerField(
+        read_only=True, help_text="Общее количество заказов."
+    )
+    next = serializers.URLField(
+        allow_null=True,
+        read_only=True,
+        help_text="URL следующей страницы или null, если следующей страницы нет.",
+    )
+    previous = serializers.URLField(
+        allow_null=True,
+        read_only=True,
+        help_text="URL предыдущей страницы или null, если предыдущей страницы нет.",
+    )
+    results = OrderDetailSerializer(many=True, read_only=True)
 
 
 class BasketItemSummarySerializer(serializers.Serializer):
@@ -973,6 +1010,10 @@ class ErrorDetailSerializer(serializers.Serializer):
 
 
 class ShopImportSerializer(serializers.Serializer):
+    MAX_FILE_SIZE = (
+        5 * 1024 * 1024
+    )  # 5 MB — синхронизировано с DATA_UPLOAD_MAX_MEMORY_SIZE
+
     file = serializers.FileField(
         required=False,
         help_text="YAML-файл прайса магазина.",
@@ -983,10 +1024,24 @@ class ShopImportSerializer(serializers.Serializer):
         help_text="YAML-содержимое прайса, если файл не передается multipart-запросом.",
     )
 
+    def validate_file(self, value):
+        if value.size > self.MAX_FILE_SIZE:
+            raise serializers.ValidationError(
+                f"Размер файла превышает {self.MAX_FILE_SIZE // (1024 * 1024)} МБ."
+            )
+        return value
+
     def validate(self, attrs):
         if not attrs.get("file") and not attrs.get("content"):
             raise serializers.ValidationError(
                 {"file": "Передайте YAML-файл или поле content."}
+            )
+        content = attrs.get("content", "")
+        if content and len(content.encode("utf-8")) > self.MAX_FILE_SIZE:
+            raise serializers.ValidationError(
+                {
+                    "content": f"Размер содержимого превышает {self.MAX_FILE_SIZE // (1024 * 1024)} МБ."
+                }
             )
         return attrs
 

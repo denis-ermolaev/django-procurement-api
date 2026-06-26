@@ -195,10 +195,11 @@ class ShopOrderItemAPITests(APITestCase):
         self.assertEqual(order.state, "canceled")
         self.assertEqual(self.product_info.reserved_quantity, 0)
 
-    def test_inactive_or_paused_shop_cannot_process_order_item(self) -> None:
+    def test_blocked_shop_can_process_existing_order_item(self) -> None:
         _, item = self.create_confirmed_item()
         self.api_client.force_authenticate(user=self.shop_user)
 
+        # Блокированный магазин может обрабатывать существующие заказы (HIGH-6)
         self.shop.status = "blocked"
         self.shop.save(update_fields=["status"])
         blocked_response = self.api_client.patch(
@@ -207,19 +208,9 @@ class ShopOrderItemAPITests(APITestCase):
             format="json",
         )
 
-        self.shop.status = "active"
-        self.shop.is_accepting_orders = False
-        self.shop.save(update_fields=["status", "is_accepting_orders"])
-        paused_response = self.api_client.patch(
-            reverse("shop-order-item-detail", args=[item.pk]),
-            {"state": "accepted"},
-            format="json",
-        )
-
-        self.assertEqual(blocked_response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(paused_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(blocked_response.status_code, status.HTTP_200_OK)
         item.refresh_from_db()
-        self.assertEqual(item.state, "confirmed")
+        self.assertEqual(item.state, "accepted")
 
 
 class AdminAPITests(APITestCase):
@@ -496,3 +487,59 @@ class AdminAPITests(APITestCase):
             admin_staff_drop_response.status_code,
             status.HTTP_400_BAD_REQUEST,
         )
+
+
+class AdminOrderFilterTests(APITestCase):
+    """Тесты фильтрации заказов администратором."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.admin_user = User.objects.create_user(
+            email="admin-filter-orders@example.com",
+            password="test-password",
+            type="admin",
+            is_staff=True,
+            is_active=True,
+        )
+        # Создаём несколько заказов с разными статусами
+        self.order_confirmed = Order.objects.create(user=self.user, state="confirmed")
+        OrderItem.objects.create(
+            order=self.order_confirmed,
+            product_info=self.product_info,
+            quantity=1,
+            state="confirmed",
+        )
+        self.order_canceled = Order.objects.create(user=self.user, state="canceled")
+        OrderItem.objects.create(
+            order=self.order_canceled,
+            product_info=self.other_product_info,
+            quantity=1,
+            state="canceled",
+        )
+
+    def test_admin_order_list_filter_by_status(self) -> None:
+        """Админ может фильтровать заказы по статусу."""
+        self.api_client.force_authenticate(user=self.admin_user)
+
+        all_response = self.api_client.get(reverse("admin-orders"), {"page_size": 100})
+        confirmed_response = self.api_client.get(
+            reverse("admin-orders"), {"page_size": 100, "status": "confirmed"}
+        )
+        canceled_response = self.api_client.get(
+            reverse("admin-orders"), {"page_size": 100, "status": "canceled"}
+        )
+        nonexistent_response = self.api_client.get(
+            reverse("admin-orders"), {"page_size": 100, "status": "nonexistent"}
+        )
+
+        self.assertEqual(all_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(confirmed_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(canceled_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(nonexistent_response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(all_response.data["count"], 2)
+        self.assertEqual(confirmed_response.data["count"], 1)
+        self.assertEqual(confirmed_response.data["results"][0]["state"], "confirmed")
+        self.assertEqual(canceled_response.data["count"], 1)
+        self.assertEqual(canceled_response.data["results"][0]["state"], "canceled")
+        self.assertEqual(nonexistent_response.data["count"], 0)

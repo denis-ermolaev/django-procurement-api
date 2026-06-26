@@ -69,7 +69,11 @@ def update_contact(
     return contact
 
 
-def delete_contact(user: User, contact_id: int | str | None) -> None:
+def delete_contact(user: User, contact_id: int) -> None:
+    """Удаляет контакт пользователя по ID.
+
+    Если по контакту есть небаскетные заказы — выполняется soft delete.
+    """
     contact = get_object_or_404(Contact, id=contact_id, user=user)
     deleted_contact_id = contact.pk
     if Order.objects.filter(contact=contact).exclude(state="basket").exists():

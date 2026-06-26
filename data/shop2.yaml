@@ -1,5 +1,6 @@
 shop: ТехноМаркет
 url: https://technomarket.example.com
+owner_email: technomarket@example.com
 categories:
   - id: 224
     name: Смартфоны

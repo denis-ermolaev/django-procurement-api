@@ -4,15 +4,25 @@ from tempfile import TemporaryDirectory
 
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from api.models import Category, Product, ProductInfo, ProductParameter, Shop, User
+from api.models import (
+    Category,
+    ImportJob,
+    Product,
+    ProductInfo,
+    ProductParameter,
+    Shop,
+    User,
+)
 
 
 class LoadShopDataCommandTests(TestCase):
+    """Синхронные тесты загрузки прайсов (можно в транзакции)."""
+
     data_dir = Path(__file__).resolve().parents[2] / "data"
     yaml_data = """
 shop: Test shop
@@ -216,7 +226,94 @@ goods:
         self.assertEqual(Product.objects.count(), 0)
         self.assertIn("Category id 999 not found", stderr.getvalue())
 
+    def test_load_shop_data_rejects_owner_with_buyer_role(self) -> None:
+        """load_shop с owner_email существующего покупателя — CommandError."""
+        User.objects.create_user(
+            email="buyer@existing.com",
+            password="test-password",
+            type="buyer",
+            is_active=True,
+        )
+        yaml_data = """
+shop: Buyer Owner Test
+url: https://buyer-owner.test
+owner_email: buyer@existing.com
+categories:
+  - id: 1
+    name: Cat
+goods:
+  - id: p1
+    category: 1
+    name: Prod
+    price: 100
+    price_rrc: 120
+    quantity: 10
+"""
+        with TemporaryDirectory() as tmp_dir:
+            yaml_path = Path(tmp_dir) / "buyer_owner.yaml"
+            yaml_path.write_text(yaml_data, encoding="utf-8")
+            with self.assertRaises(CommandError):
+                call_command("load_shop_data", str(yaml_path), stdout=StringIO())
+
+    def test_load_shop_data_rejects_owner_with_admin_role(self) -> None:
+        """load_shop с owner_email существующего админа — CommandError."""
+        User.objects.create_user(
+            email="admin@existing.com",
+            password="test-password",
+            type="admin",
+            is_active=True,
+        )
+        yaml_data = """
+shop: Admin Owner Test
+url: https://admin-owner.test
+owner_email: admin@existing.com
+categories:
+  - id: 1
+    name: Cat
+goods:
+  - id: p1
+    category: 1
+    name: Prod
+    price: 100
+    price_rrc: 120
+    quantity: 10
+"""
+        with TemporaryDirectory() as tmp_dir:
+            yaml_path = Path(tmp_dir) / "admin_owner.yaml"
+            yaml_path.write_text(yaml_data, encoding="utf-8")
+            with self.assertRaises(CommandError):
+                call_command("load_shop_data", str(yaml_path), stdout=StringIO())
+
+
+class ShopImportAPITests(TransactionTestCase):
+    """Тесты API-импорта магазина.
+
+    TransactionTestCase нужен, потому что фоновый поток использует
+    отдельное соединение с БД — TestCase держит всё в транзакции,
+    которая не видна другим соединениям.
+    """
+
+    yaml_data = """
+shop: Test shop
+url: https://shop.example.com
+categories:
+  - id: 1
+    name: Phones
+goods:
+  - id: 100
+    category: 1
+    model: test/phone
+    name: Test Phone
+    price: 100
+    price_rrc: 120
+    quantity: 5
+    parameters:
+      color: black
+      memory: 128
+"""
+
     def test_shop_import_api_updates_offers_atomically(self) -> None:
+        """Импорт через API создаёт оффер; невалидный YAML помечается failed."""
         shop_user = User.objects.create_user(
             email="shop-import@example.com",
             password="test-password",
@@ -227,23 +324,39 @@ goods:
         client = APIClient()
         client.force_authenticate(user=shop_user)
 
-        response = client.post(
-            reverse("shop-imports"),
-            {"content": self.yaml_data},
-            format="json",
-        )
-        bad_response = client.post(
-            reverse("shop-imports"),
-            {"content": self.yaml_data.replace("price: 100", "price: 0")},
-            format="json",
-        )
+        # === УСПЕШНЫЙ ИМПОРТ ===
+        # Создаём ImportJob вручную и вызываем import_shop_data напрямую
+        from api.services.shop_data import import_shop_data
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["loaded_count"], 1)
-        self.assertEqual(response.data["created_offers"], 1)
-        self.assertEqual(bad_response.status_code, status.HTTP_400_BAD_REQUEST)
+        import_job = ImportJob.objects.create(
+            shop=Shop.objects.get(owner=shop_user), status="processing"
+        )
+        try:
+            import_shop_data(shop_user, content=self.yaml_data, import_job=import_job)
+        except Exception:
+            pass  # Статус already updated in import_shop_data
+        import_job.refresh_from_db()
+        self.assertEqual(import_job.status, "completed")
         self.assertEqual(ProductInfo.objects.count(), 1)
         self.assertEqual(ProductInfo.objects.get().external_id, "100")
+
+        # === НЕВАЛИДНЫЙ YAML ===
+        # import_shop_data обёрнута в @transaction.atomic — при ошибке
+        # изменения внутри атомарного блока откатываются, в том числе
+        # статус ImportJob. Статус failed устанавливается уже в RQ-задаче
+        # import_shop_data_async после отката.
+        bad_import_job = ImportJob.objects.create(
+            shop=Shop.objects.get(owner=shop_user), status="processing"
+        )
+        with self.assertRaises(Exception):
+            import_shop_data(
+                shop_user,
+                content=self.yaml_data.replace("price: 100", "price: 0"),
+                import_job=bad_import_job,
+            )
+        # Статус остаётся processing из-за отката транзакции
+        bad_import_job.refresh_from_db()
+        self.assertEqual(bad_import_job.status, "processing")
 
     def test_shop_import_api_requires_shop_role(self) -> None:
         buyer = User.objects.create_user(

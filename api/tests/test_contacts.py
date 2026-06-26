@@ -20,11 +20,11 @@ class ContactAPITests(APITestCase):
         self.authenticate()
 
         create_response = self.api_client.post(
-            reverse("contact"), self.contact_payload, format="json"
+            reverse("contacts"), self.contact_payload, format="json"
         )
-        list_response = self.api_client.get(reverse("contact"))
+        list_response = self.api_client.get(reverse("contacts"))
 
-        self.assertEqual(create_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
         contact = Contact.objects.get(user=self.user)
         self.assertEqual(create_response.data["data"]["id"], contact.pk)
         self.assertEqual(list_response.status_code, status.HTTP_200_OK)
@@ -34,7 +34,7 @@ class ContactAPITests(APITestCase):
         self.authenticate()
 
         response = self.api_client.post(
-            reverse("contact"), {"city": "Kaliningrad"}, format="json"
+            reverse("contacts"), {"city": "Kaliningrad"}, format="json"
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
@@ -44,7 +44,7 @@ class ContactAPITests(APITestCase):
     def test_empty_contact_list_returns_empty_data(self) -> None:
         self.authenticate()
 
-        response = self.api_client.get(reverse("contact"))
+        response = self.api_client.get(reverse("contacts"))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data, {"data": []})
@@ -57,9 +57,11 @@ class ContactAPITests(APITestCase):
         self.authenticate()
 
         forbidden_response = self.api_client.delete(
-            f"{reverse('contact')}?id={other_contact.pk}"
+            f"{reverse('contact-detail', args=[other_contact.pk])}"
         )
-        response = self.api_client.delete(f"{reverse('contact')}?id={own_contact.pk}")
+        response = self.api_client.delete(
+            reverse("contact-detail", args=[own_contact.pk])
+        )
 
         self.assertEqual(forbidden_response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
@@ -71,9 +73,9 @@ class ContactAPITests(APITestCase):
         self.authenticate()
 
         delete_response = self.api_client.delete(
-            f"{reverse('contact')}?id={contact.pk}"
+            reverse("contact-detail", args=[contact.pk])
         )
-        list_response = self.api_client.get(reverse("contact"))
+        list_response = self.api_client.get(reverse("contacts"))
 
         self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
         contact.refresh_from_db()
@@ -95,7 +97,7 @@ class ContactAPITests(APITestCase):
         )
 
         self.assertEqual(get_response.status_code, status.HTTP_200_OK)
-        self.assertEqual(get_response.data["id"], contact.pk)
+        self.assertEqual(get_response.data["data"]["id"], contact.pk)
         self.assertEqual(patch_response.status_code, status.HTTP_200_OK)
         self.assertEqual(patch_response.data["city"], "Moscow")
         self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
@@ -122,3 +124,26 @@ class ContactAPITests(APITestCase):
 
         self.assertEqual(deleted_response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertEqual(foreign_response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_contact_detail_format_matches_list_format(self) -> None:
+        """Проверка единообразия: detail и list возвращают data-обёртку."""
+        contact = Contact.objects.create(user=self.user, **self.contact_payload)
+        self.authenticate()
+
+        list_response = self.api_client.get(reverse("contacts"))
+        detail_response = self.api_client.get(
+            reverse("contact-detail", args=[contact.pk])
+        )
+
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
+
+        # Оба ответа содержат data-обёртку
+        self.assertIn("data", list_response.data)
+        self.assertIn("data", detail_response.data)
+
+        # Поля контакта совпадают
+        detail_contact = detail_response.data["data"]
+        self.assertEqual(detail_contact["city"], self.contact_payload["city"])
+        self.assertEqual(detail_contact["street"], self.contact_payload["street"])
+        self.assertEqual(detail_contact["phone"], self.contact_payload["phone"])

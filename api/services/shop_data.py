@@ -1,4 +1,5 @@
 import logging
+import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -7,10 +8,13 @@ import yaml
 from django.core.management.base import CommandError
 from django.db import transaction
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from django_rq import job
 from rest_framework.exceptions import ValidationError
 
 from api.models import (
     Category,
+    ImportJob,
     Parameter,
     Product,
     ProductInfo,
@@ -93,6 +97,8 @@ def load_shop(data: dict[str, Any]) -> Shop:
     shop_name = data["shop"]
     shop_url = data.get("url", "")
     shop_status = data.get("status", "active")
+    owner_email = data.get("owner_email")
+
     shop, created = Shop.objects.get_or_create(
         name=shop_name,
         defaults={"url": shop_url, "status": shop_status},
@@ -103,6 +109,39 @@ def load_shop(data: dict[str, Any]) -> Shop:
         shop.pk,
         shop.name,
     )
+
+    # Привязка владельца магазина, если указан owner_email в YAML
+    if owner_email and shop.owner is None:
+        owner, created = User.objects.get_or_create(
+            email=owner_email,
+            defaults={
+                "first_name": shop_name,
+                "type": "shop",
+                "is_active": True,
+            },
+        )
+        if created:
+            if not owner.has_usable_password():
+                owner.set_unusable_password()
+                owner.save(update_fields=["password"])
+        elif owner.type != "shop":
+            logger.warning(
+                "[load_shop] owner_type_mismatch email=%s existing_type=%s expected_type=shop",
+                owner_email,
+                owner.type,
+            )
+            raise CommandError(
+                f"Пользователь {owner_email} уже существует с типом «{owner.type}», "
+                f"а не «shop». Невозможно назначить владельцем магазина."
+            )
+        shop.owner = owner
+        shop.save(update_fields=["owner", "updated_at"])
+        logger.info(
+            "[load_shop] shop_data_owner_set shop_id=%s owner_email=%s",
+            shop.pk,
+            owner_email,
+        )
+
     changed_fields: list[str] = []
     if not created and shop_url and shop.url != shop_url:
         shop.url = shop_url
@@ -314,38 +353,105 @@ def replace_product_parameters(product_info: ProductInfo, good: dict[str, Any]) 
     return parameter_count
 
 
-# 3. API-импорт поставщика ----
+# 3. API-импорт поставщика (RQ-задача) ----
+@job("default")
+def import_shop_data_async(user_id: int, *, import_job_id: int, content: str) -> None:
+    """Фоновый импорт прайса через RQ-воркер.
+
+    ``import_shop_data`` обёрнута в ``@transaction.atomic``; при ошибке
+    откатывается и ``import_job.status = "failed"``.  Поэтому сохраняем
+    статус ошибки здесь — после отката основной транзакции.
+    """
+    user = get_object_or_404(User, pk=user_id)
+    import_job = ImportJob.objects.select_related("shop").get(pk=import_job_id)
+    try:
+        import_shop_data(user, content=content, import_job=import_job)
+        logger.info(
+            "[import_shop_data_async] rq_import_completed import_job_id=%s shop_id=%s",
+            import_job_id,
+            import_job.shop.pk,
+        )
+    except (ValidationError, CommandError, Exception):
+        # Откат @transaction.atomic откатил сохранение статуса внутри
+        # import_shop_data — сохраняем здесь в новой транзакции.
+        # SystemExit и KeyboardInterrupt НЕ перехватываются — они унаследованы
+        # от BaseException, а не Exception.
+        ImportJob.objects.filter(pk=import_job_id).update(
+            status="failed",
+            completed_at=timezone.now(),
+            error_log=traceback.format_exc(),
+        )
+        logger.exception(
+            "[import_shop_data_async] rq_import_failed import_job_id=%s",
+            import_job_id,
+        )
+
+
 @transaction.atomic
-def import_shop_data(user: User, *, content: str) -> ShopDataLoadResult:
+def import_shop_data(
+    user: User, *, content: str, import_job: ImportJob | None = None
+) -> ShopDataLoadResult:
     shop = get_object_or_404(Shop, owner=user)
     if shop.status != "active":
         raise ValidationError({"shop": "Импорт доступен только активному магазину."})
 
-    data = read_shop_yaml_content(content)
-    validate_shop_import_data(data, shop)
-    logger.info(
-        "[import_shop_data] shop_import_started user_id=%s shop_id=%s",
-        user.pk,
-        shop.pk,
-    )
+    # Создаём задачу импорта, если не передана извне
+    if import_job is None:
+        import_job = ImportJob.objects.create(
+            shop=shop,
+            status="processing",
+        )
 
-    cat_by_id = load_categories(data.get("categories", []), shop)
-    result = load_goods(data.get("goods", []), shop, cat_by_id)
-    result.hidden_offers = hide_missing_import_offers(shop, result.seen_external_ids)
+    try:
+        data = read_shop_yaml_content(content)
+        validate_shop_import_data(data, shop)
+        logger.info(
+            "[import_shop_data] shop_import_started user_id=%s shop_id=%s",
+            user.pk,
+            shop.pk,
+        )
 
-    logger.info(
-        (
-            "[import_shop_data] shop_import_completed user_id=%s shop_id=%s "
-            "loaded_count=%s created_offers=%s updated_offers=%s hidden_offers=%s"
-        ),
-        user.pk,
-        shop.pk,
-        result.loaded_count,
-        result.created_offers,
-        result.updated_offers,
-        result.hidden_offers,
-    )
-    return result
+        cat_by_id = load_categories(data.get("categories", []), shop)
+        result = load_goods(data.get("goods", []), shop, cat_by_id)
+        result.hidden_offers = hide_missing_import_offers(
+            shop, result.seen_external_ids
+        )
+
+        # Обновляем задачу импорта — успех
+        import_job.status = "completed"
+        import_job.completed_at = timezone.now()
+        import_job.stats = {
+            "loaded_count": result.loaded_count,
+            "created_offers": result.created_offers,
+            "updated_offers": result.updated_offers,
+            "hidden_offers": result.hidden_offers,
+        }
+        import_job.save(update_fields=["status", "completed_at", "stats"])
+
+        logger.info(
+            (
+                "[import_shop_data] shop_import_completed user_id=%s shop_id=%s "
+                "loaded_count=%s created_offers=%s updated_offers=%s hidden_offers=%s"
+            ),
+            user.pk,
+            shop.pk,
+            result.loaded_count,
+            result.created_offers,
+            result.updated_offers,
+            result.hidden_offers,
+        )
+        return result
+    except Exception:
+        import_job.status = "failed"
+        import_job.completed_at = timezone.now()
+        import_job.error_log = traceback.format_exc()
+        import_job.save(update_fields=["status", "completed_at", "error_log"])
+        logger.exception(
+            "[import_shop_data] shop_import_failed user_id=%s shop_id=%s",
+            user.pk,
+            shop.pk,
+        )
+        raise
 
 
 def validate_shop_import_data(data: dict[str, Any], shop: Shop) -> None:

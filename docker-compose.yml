@@ -19,7 +19,13 @@ services:
   # 2. Django API ----
   web:
     build: .
-    command: uv run python manage.py runserver 0.0.0.0:8000
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py load_shop_data /app/data/shop1.yaml &&
+             python manage.py load_shop_data /app/data/shop2.yaml &&
+             python manage.py load_shop_data /app/data/shop3.yaml &&
+             python manage.py load_shop_data /app/data/shop4.yaml &&
+             python manage.py runserver 0.0.0.0:8000"
     volumes:
       - .:/app
     ports:
@@ -27,8 +33,55 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started
     env_file:
       - .env
 
+  # 3. Redis ----
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - redis_data:/data
+
+  # 5. RQ Worker (асинхронная обработка задач) ----
+  worker:
+    build: .
+    command: python manage.py rqworker default
+    volumes:
+      - .:/app
+    environment:
+      DJANGO_SETTINGS_MODULE: core.settings
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    env_file:
+      - .env
+
+  # 6. Тестовая PostgreSQL (одноразовая, без volume) ----
+  test-db:
+    image: postgres:16.2-alpine3.19
+    environment:
+      - POSTGRES_DB=${DB_TEST_NAME}
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_TEST_NAME}"]
+      interval: 3s
+      timeout: 3s
+      retries: 5
+    profiles:
+      - test
+
 volumes:
   postgres_data:
+  redis_data:

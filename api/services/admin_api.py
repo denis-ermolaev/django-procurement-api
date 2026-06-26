@@ -1,7 +1,7 @@
 import logging
 from typing import Any
 
-from django.db.models import QuerySet
+from django.db.models import Q, QuerySet
 from django.shortcuts import get_object_or_404
 from rest_framework.exceptions import ValidationError
 
@@ -11,8 +11,15 @@ logger = logging.getLogger(__name__)
 
 
 # 1. Пользователи ----
-def get_all_users() -> QuerySet[User]:
-    return User.objects.order_by("id")
+def get_all_users(search: str | None = None) -> QuerySet[User]:
+    qs = User.objects.order_by("id")
+    if search:
+        qs = qs.filter(
+            Q(email__icontains=search)
+            | Q(first_name__icontains=search)
+            | Q(last_name__icontains=search)
+        )
+    return qs
 
 
 def get_user(user_id: int) -> User:
@@ -113,8 +120,11 @@ def update_offer(product_info_id: int, offer_data: dict[str, Any]) -> ProductInf
 
 
 # 3. Каталог ----
-def get_all_categories() -> QuerySet[Category]:
-    return Category.objects.order_by("id")
+def get_all_categories(search: str | None = None) -> QuerySet[Category]:
+    qs = Category.objects.order_by("id")
+    if search:
+        qs = qs.filter(name__icontains=search)
+    return qs
 
 
 def create_category(category_data: dict[str, Any]) -> Category:
@@ -140,8 +150,11 @@ def update_category(category_id: int, category_data: dict[str, Any]) -> Category
     return category
 
 
-def get_all_products() -> QuerySet[Product]:
-    return Product.objects.select_related("category").order_by("id")
+def get_all_products(search: str | None = None) -> QuerySet[Product]:
+    qs = Product.objects.select_related("category").order_by("id")
+    if search:
+        qs = qs.filter(name__icontains=search)
+    return qs
 
 
 def create_product(product_data: dict[str, Any]) -> Product:
@@ -167,8 +180,11 @@ def update_product(product_id: int, product_data: dict[str, Any]) -> Product:
     return product
 
 
-def get_all_parameters() -> QuerySet[Parameter]:
-    return Parameter.objects.order_by("id")
+def get_all_parameters(search: str | None = None) -> QuerySet[Parameter]:
+    qs = Parameter.objects.order_by("id")
+    if search:
+        qs = qs.filter(name__icontains=search)
+    return qs
 
 
 def create_parameter(parameter_data: dict[str, Any]) -> Parameter:

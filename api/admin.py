@@ -3,6 +3,7 @@ from django.contrib import admin
 from .models import (
     Category,
     Contact,
+    ImportJob,
     Order,
     OrderItem,
     Parameter,
@@ -84,3 +85,10 @@ class ContactAdmin(admin.ModelAdmin):
     list_display = ("id", "user", "city", "street", "phone", "is_deleted")
     list_filter = ("is_deleted",)
     search_fields = ("user__email", "phone")
+
+
+@admin.register(ImportJob)
+class ImportJobAdmin(admin.ModelAdmin):
+    list_display = ("id", "shop", "status", "created_at", "completed_at")
+    list_filter = ("status", "shop")
+    readonly_fields = ("created_at", "completed_at")

@@ -1,22 +1,90 @@
 import logging
-from functools import partial
 
 from django.db import transaction
-from django.db.models import QuerySet
+from django.db.models import Q, QuerySet
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
-from api.management.email_service import send_order_confirmation
 from api.models import Contact, Order, OrderItem, ProductInfo, Shop, User
+from api.services.email_service import send_order_confirmation_async
 
 logger = logging.getLogger(__name__)
 
-SHOP_STATE_ORDER = ("confirmed", "accepted", "assembled", "sent", "delivered")
+# Словарь допустимых переходов статусов позиций заказа (state machine)
+# Ключ — текущий статус, значение — множество допустимых следующих статусов
+ORDER_ITEM_TRANSITIONS: dict[str, set[str]] = {
+    "basket": {"confirmed"},
+    "confirmed": {"accepted", "canceled"},
+    "accepted": {"assembled", "canceled"},
+    "assembled": {"sent", "canceled"},
+    "sent": {"delivered"},
+    "delivered": set(),
+    "canceled": set(),
+}
+
+# Допустимые переходы для администратора (шире, чем для магазина)
+ADMIN_ORDER_ITEM_TRANSITIONS: dict[str, set[str]] = {
+    "basket": {"confirmed", "canceled"},
+    "confirmed": {"accepted", "assembled", "sent", "delivered", "canceled"},
+    "accepted": {"assembled", "sent", "delivered", "canceled"},
+    "assembled": {"sent", "delivered", "canceled"},
+    "sent": {"delivered"},
+    "delivered": set(),
+    "canceled": set(),
+}
+
+# Допустимые переходы для магазина (только последовательно + отмена)
+SHOP_ORDER_ITEM_TRANSITIONS: dict[str, set[str]] = {
+    "confirmed": {"accepted", "canceled"},
+    "accepted": {"assembled", "canceled"},
+    "assembled": {"sent", "canceled"},
+    "sent": {"delivered"},
+}
+
+
+def validate_transition(
+    current_state: str,
+    new_state: str,
+    *,
+    transitions: dict[str, set[str]] | None = None,
+) -> None:
+    """Проверяет допустимость перехода статуса позиции заказа.
+
+    Args:
+        current_state: Текущий статус
+        new_state: Целевой статус
+        transitions: Словарь допустимых переходов (по умолчанию ORDER_ITEM_TRANSITIONS)
+
+    Raises:
+        ValidationError: Если переход недопустим
+    """
+    if transitions is None:
+        transitions = ORDER_ITEM_TRANSITIONS
+
+    allowed = transitions.get(current_state)
+    if allowed is None:
+        raise ValidationError(
+            {"state": f"Неизвестный статус позиции: {current_state}."}
+        )
+    if new_state not in allowed:
+        raise ValidationError(
+            {
+                "state": (
+                    f"Перевод позиции из статуса «{current_state}» "
+                    f"в статус «{new_state}» невозможен."
+                )
+            }
+        )
 
 
 # 1. Общие операции со статусами и резервом ----
 def recalculate_order_state(order: Order) -> Order:
+    """Пересчитывает статус заказа на основе статусов его позиций.
+
+    Всегда сохраняет результат в БД. Оптимизация: вызывается только при
+    изменении статуса позиций, а не при каждом PATCH-запросе.
+    """
     if order.state == "basket":
         return order
 
@@ -100,10 +168,45 @@ def ship_item_stock(order_item: OrderItem) -> None:
 
 
 def cancel_order_items(order: Order) -> None:
-    for item in OrderItem.objects.select_for_update().filter(order=order):
+    items = list(OrderItem.objects.select_for_update().filter(order=order))
+    if not items:
+        return
+
+    # Блокируем все ProductInfo одним запросом до цикла — устранение deadlock
+    product_info_ids = [
+        item.product_info.pk
+        for item in items
+        if item.state not in {"sent", "delivered", "canceled"}
+    ]
+    if product_info_ids:
+        locked_product_infos = {
+            pi.pk: pi
+            for pi in ProductInfo.objects.select_for_update().filter(
+                pk__in=product_info_ids
+            )
+        }
+    else:
+        locked_product_infos = {}
+
+    for item in items:
         if item.state in {"sent", "delivered", "canceled"}:
             continue
-        release_item_reserve(item)
+        if item.product_info is None:
+            continue
+        product_info = locked_product_infos.get(item.product_info.pk)
+        if product_info is None:
+            continue
+        if product_info.reserved_quantity > 0:
+            released_quantity = min(product_info.reserved_quantity, item.quantity)
+            product_info.reserved_quantity -= released_quantity
+            product_info.save(update_fields=["reserved_quantity"])
+            logger.info(
+                "[release_item_reserve] order_item_reserve_released order_id=%s item_id=%s product_info_id=%s quantity=%s",
+                order.pk,
+                item.pk,
+                product_info.pk,
+                released_quantity,
+            )
         item.state = "canceled"
         item.save(update_fields=["state"])
 
@@ -117,17 +220,6 @@ def apply_order_item_snapshot(item: OrderItem, product_info: ProductInfo) -> Non
     item.external_id_snapshot = product_info.external_id
 
 
-def send_order_confirmation_after_commit(order_id: int) -> None:
-    try:
-        order = Order.objects.select_related("user").get(pk=order_id)
-        send_order_confirmation(order)
-    except Exception:
-        logger.exception(
-            "[send_order_confirmation_after_commit] order_confirm_email_failed order_id=%s",
-            order_id,
-        )
-
-
 # 2. Покупательские операции ----
 @transaction.atomic
 def confirm_order(user: User, *, order_id: int, contact_id: int) -> Order:
@@ -138,7 +230,9 @@ def confirm_order(user: User, *, order_id: int, contact_id: int) -> Order:
         contact_id,
     )
 
-    order = get_object_or_404(Order, id=order_id, user=user, state="basket")
+    order = get_object_or_404(
+        Order.objects.select_for_update(), id=order_id, user=user, state="basket"
+    )
     items = list(
         OrderItem.objects.select_for_update()
         .filter(order=order)
@@ -157,12 +251,19 @@ def confirm_order(user: User, *, order_id: int, contact_id: int) -> Order:
 
     contact = get_object_or_404(Contact, id=contact_id, user=user, is_deleted=False)
 
+    # Один массовый SELECT FOR UPDATE для всех ProductInfo — устранение N+1
+    product_info_ids = [item.product_info.pk for item in items]
+    product_infos = {
+        pi.pk: pi
+        for pi in ProductInfo.objects.select_for_update()
+        .select_related("shop", "product__category")
+        .filter(pk__in=product_info_ids)
+    }
+
     for item in items:
-        product_info = (
-            ProductInfo.objects.select_for_update()
-            .select_related("shop", "product__category")
-            .get(pk=item.product_info.pk)
-        )
+        product_info = product_infos.get(item.product_info.pk)
+        if product_info is None:
+            raise ValidationError({"order_id": "Предложение больше не существует."})
         available_quantity = product_info.quantity - product_info.reserved_quantity
         if (
             product_info.status != "active"
@@ -227,7 +328,7 @@ def confirm_order(user: User, *, order_id: int, contact_id: int) -> Order:
         order.pk,
         contact.pk,
     )
-    transaction.on_commit(partial(send_order_confirmation_after_commit, order.pk))
+    transaction.on_commit(lambda: send_order_confirmation_async.delay(order.pk))
     return order
 
 
@@ -278,12 +379,6 @@ def cancel_order_by_buyer(order: Order) -> Order:
     return order
 
 
-def update_order_state(order: Order, new_state: str) -> Order:
-    if new_state != "canceled":
-        raise ValidationError({"state": "Покупатель может только отменить заказ."})
-    return cancel_order_by_buyer(order)
-
-
 # 3. Операции магазина ----
 def get_shop_order_items(user: User) -> QuerySet[OrderItem]:
     shop = get_object_or_404(Shop, owner=user)
@@ -307,10 +402,6 @@ def update_shop_order_item_state(
     user: User, *, item_id: int, new_state: str
 ) -> OrderItem:
     shop = get_object_or_404(Shop, owner=user)
-    if shop.status != "active" or not shop.is_accepting_orders:
-        raise ValidationError(
-            {"shop": "Магазин должен быть активным и принимать заказы."}
-        )
     item = get_object_or_404(
         OrderItem.objects.select_for_update().select_related("order", "product_info"),
         pk=item_id,
@@ -318,14 +409,20 @@ def update_shop_order_item_state(
     )
     if item.order.state == "basket" or item.state == "basket":
         raise ValidationError({"state": "Позиция корзины еще не подтверждена."})
-    if item.state == "canceled":
-        raise ValidationError({"state": "Отмененную позицию нельзя изменить."})
 
+    if shop.status != "active" or not shop.is_accepting_orders:
+        logger.warning(
+            "[update_shop_order_item_state] shop_blocked_but_updating_existing_order "
+            "shop_id=%s item_id=%s new_state=%s",
+            shop.pk,
+            item.pk,
+            new_state,
+        )
+    # Проверяем допустимость перехода для магазина
+    validate_transition(item.state, new_state, transitions=SHOP_ORDER_ITEM_TRANSITIONS)
+
+    # Отмена — особый случай (освобождаем резерв)
     if new_state == "canceled":
-        if item.state in {"sent", "delivered"}:
-            raise ValidationError(
-                {"state": "Магазин не может отменить позицию после отправки."}
-            )
         old_state = item.state
         release_item_reserve(item)
         item.state = "canceled"
@@ -340,22 +437,11 @@ def update_shop_order_item_state(
         recalculate_order_state(item.order)
         return item
 
-    try:
-        current_index = SHOP_STATE_ORDER.index(item.state)
-        new_index = SHOP_STATE_ORDER.index(new_state)
-    except ValueError as exc:
-        raise ValidationError(
-            {"state": "Недопустимый переход статуса позиции."}
-        ) from exc
-
-    if new_index != current_index + 1:
-        raise ValidationError(
-            {"state": "Магазин может переводить позицию только на следующий статус."}
-        )
-
-    old_state = item.state
+    # Отгрузка — особый случай (списываем со склада)
     if new_state == "sent":
         ship_item_stock(item)
+
+    old_state = item.state
     item.state = new_state
     item.save(update_fields=["state"])
     logger.info(
@@ -371,8 +457,20 @@ def update_shop_order_item_state(
 
 
 # 4. Административные операции ----
-def get_all_orders() -> QuerySet[Order]:
-    return Order.objects.exclude(state="basket").order_by("id")
+def get_all_orders(
+    search: str | None = None,
+    status: str | None = None,
+) -> QuerySet[Order]:
+    qs = Order.objects.exclude(state="basket").order_by("id")
+    if search:
+        qs = qs.filter(
+            Q(user__email__icontains=search)
+            | Q(id__icontains=search)
+            | Q(contact__city__icontains=search)
+        )
+    if status:
+        qs = qs.filter(state=status)
+    return qs
 
 
 def get_admin_order(pk: int) -> Order:
@@ -435,31 +533,16 @@ def update_order_item_state_by_admin(
     )
     old_state = item.state
 
-    if item.state in {"sent", "delivered"} and new_state not in {
-        "sent",
-        "delivered",
-        "canceled",
-    }:
-        raise ValidationError(
-            {
-                "state": (
-                    "Нельзя вернуть отправленную или доставленную позицию "
-                    "к статусу до отправки: складской остаток уже списан."
-                )
-            }
-        )
-    if item.state == "delivered" and new_state == "sent":
-        raise ValidationError(
-            {"state": "Нельзя вернуть доставленную позицию в статус sent."}
-        )
-    if item.state in {"sent", "delivered"} and new_state == "canceled":
-        raise ValidationError(
-            {"state": "Нельзя отменить отправленную или доставленную позицию."}
-        )
+    # Проверяем допустимость перехода для администратора
+    validate_transition(item.state, new_state, transitions=ADMIN_ORDER_ITEM_TRANSITIONS)
+
+    # Освобождаем резерв при отмене
     if new_state == "canceled" and item.state not in {"sent", "delivered", "canceled"}:
         release_item_reserve(item)
+    # Списываем со склада при отправке/доставке (если ещё не списано)
     if new_state in {"sent", "delivered"} and item.state not in {"sent", "delivered"}:
         ship_item_stock(item)
+
     item.state = new_state
     item.save(update_fields=["state"])
     logger.info(

@@ -1,14 +1,45 @@
 import logging
 from typing import Any
 
+from django.core.cache import cache
 from django.db.models import QuerySet
 from django.shortcuts import get_object_or_404
 from rest_framework.exceptions import ValidationError
 
 from api.filters import OfferFilter, ProductFilter
-from api.models import Product, ProductInfo, User
+from api.models import Category, Product, ProductInfo, User
+from core.settings import CACHE_TIMEOUT_CATALOG
 
 logger = logging.getLogger(__name__)
+
+
+# 0. Справочники ----
+def get_active_categories() -> list[Category]:
+    """Возвращает активные категории, в которых есть активные предложения."""
+    logger.debug("[get_active_categories] загрузка активных категорий")
+
+    cache_key = "catalog:active_categories"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        logger.debug("[get_active_categories] возвращено из кэша")
+        return cached
+
+    qs = list(
+        Category.objects.filter(
+            status="active",
+            shops__status="active",
+            shops__is_accepting_orders=True,
+            product__status="active",
+            product__productinfo__status="active",
+        )
+        .distinct()
+        .order_by("name")
+    )
+    cache.set(cache_key, qs, CACHE_TIMEOUT_CATALOG)
+    logger.debug(
+        "[get_active_categories] закэшировано на %s сек", CACHE_TIMEOUT_CATALOG
+    )
+    return qs
 
 
 # 1. Каталог товаров ----
@@ -58,6 +89,12 @@ def log_product_page_loaded(user: User, *, total_count: int, page_size: int) -> 
 
 
 def get_product_info(pk: int) -> ProductInfo:
+    cache_key = f"catalog:product_detail:{pk}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        logger.debug("[get_product_info] возвращено из кэша product_info_id=%s", pk)
+        return cached
+
     product_info = get_object_or_404(
         ProductInfo,
         pk=pk,
@@ -67,6 +104,7 @@ def get_product_info(pk: int) -> ProductInfo:
         product__status="active",
         product__category__status="active",
     )
+    cache.set(cache_key, product_info, CACHE_TIMEOUT_CATALOG)
     logger.debug(
         "[get_product_info] product_detail_loaded product_info_id=%s product_id=%s shop_id=%s",
         product_info.pk,
@@ -150,6 +188,12 @@ def log_offer_page_loaded(
 
 
 def get_offer(pk: int) -> ProductInfo:
+    cache_key = f"catalog:offer_detail:{pk}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        logger.debug("[get_offer] возвращено из кэша offer_id=%s", pk)
+        return cached
+
     offer = get_object_or_404(
         ProductInfo.objects.select_related(
             "product__category", "shop"
@@ -161,6 +205,7 @@ def get_offer(pk: int) -> ProductInfo:
         product__status="active",
         product__category__status="active",
     )
+    cache.set(cache_key, offer, CACHE_TIMEOUT_CATALOG)
     logger.debug(
         "[get_offer] предложение загружено offer_id=%s product_id=%s shop_id=%s",
         offer.pk,

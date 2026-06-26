@@ -35,6 +35,7 @@ class ProductFilter(django_filters.FilterSet):
         offer_filters = {
             "productinfo__status": "active",
             "productinfo__shop__status": "active",
+            "productinfo__shop__is_accepting_orders": True,
         }
         shop_id = self.form.cleaned_data.get("shop_id")
         price_min = self.form.cleaned_data.get("price_min")
@@ -47,6 +48,10 @@ class ProductFilter(django_filters.FilterSet):
             offer_filters["productinfo__price__gte"] = price_min
         if price_max is not None:
             offer_filters["productinfo__price__lte"] = price_max
+        # Дублируем productinfo__productparameter в offer_filters, чтобы
+        # shop_id и parameter применялись к ОДНОМУ offer, а не к разным.
+        # Без этого дублирования Django ORM матчит shop_id на один offer,
+        # а parameter — на другой offer того же товара.
         if parameter and ":" in parameter:
             param_name, param_value = parameter.split(":", 1)
             offer_filters["productinfo__productparameter__parameter__name"] = param_name
@@ -65,6 +70,8 @@ class ProductFilter(django_filters.FilterSet):
         """
         Ожидается строка вида 'имя_параметра:значение'
         Например: 'цвет:красный'
+        Применяется автоматически через CharFilter с method=filter_by_parameter.
+        Вызов через super().filter_queryset() создаёт первый JOIN к productparameter.
         """
         if ":" not in value:
             return queryset

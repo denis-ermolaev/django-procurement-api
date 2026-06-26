@@ -2,7 +2,7 @@ import logging
 from typing import Any
 
 from django.db import transaction
-from django.db.models import QuerySet
+from django.db.models import Q, QuerySet
 from django.shortcuts import get_object_or_404
 from rest_framework.exceptions import ValidationError
 
@@ -182,9 +182,15 @@ def update_shop_offer(
 
 
 # 3. Административные списки ----
-def get_all_shops() -> QuerySet[Shop]:
-    return Shop.objects.select_related("owner").order_by("id")
+def get_all_shops(search: str | None = None) -> QuerySet[Shop]:
+    qs = Shop.objects.select_related("owner").order_by("id")
+    if search:
+        qs = qs.filter(Q(name__icontains=search) | Q(owner__email__icontains=search))
+    return qs
 
 
-def get_all_offers() -> QuerySet[ProductInfo]:
-    return ProductInfo.objects.select_related("shop", "product").order_by("id")
+def get_all_offers(search: str | None = None) -> QuerySet[ProductInfo]:
+    qs = ProductInfo.objects.select_related("shop", "product").order_by("id")
+    if search:
+        qs = qs.filter(Q(name__icontains=search) | Q(product__name__icontains=search))
+    return qs

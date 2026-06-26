@@ -14,14 +14,15 @@ __pycache__/
 *.py[cod]
 *.sqlite3
 
-# 3. Кэши инструментов ----
+# 3. Временные файлы проекта ----
+tmp/
+
+# 4. Кэши инструментов ----
 .mypy_cache/
 .ruff_cache/
 .ty/
 .pytest_cache/
-.coverage
-htmlcov/
 
-# 4. Django артефакты ----
+# 5. Django артефакты ----
 media/
 staticfiles/

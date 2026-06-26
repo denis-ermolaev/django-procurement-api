@@ -1,5 +1,6 @@
 shop: Связной
 url: https://svyaznoy.example.com
+owner_email: svyaznoy@example.com
 categories:
   - id: 224
     name: Смартфоны

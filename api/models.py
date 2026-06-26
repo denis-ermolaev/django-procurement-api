@@ -1,4 +1,4 @@
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 import django_stubs_ext
 from django.contrib.auth.models import AbstractUser
@@ -56,6 +56,13 @@ SHOP_STATUS_CHOICES = (
     ("archived", "Архивирован"),
 )
 
+IMPORT_JOB_STATUS_CHOICES = (
+    ("pending", "Ожидает"),
+    ("processing", "В обработке"),
+    ("completed", "Завершён"),
+    ("failed", "Ошибка"),
+)
+
 
 # 2. Модели авторизации ----
 class UserManager(BaseUserManager):
@@ -63,7 +70,9 @@ class UserManager(BaseUserManager):
 
     use_in_migrations = True
 
-    def _create_user(self, email: str, password: str | None, **extra_fields: Any):
+    def _create_user(
+        self, email: str, password: str | None, **extra_fields: Any
+    ) -> "User":
         """Создать пользователя с нормализованным email и сохраненным паролем."""
         if not email:
             raise ValueError("The given email must be set")
@@ -71,18 +80,18 @@ class UserManager(BaseUserManager):
         user = self.model(email=email, **extra_fields)
         user.set_password(password)
         user.save(using=self._db)
-        return user
+        return cast("User", user)
 
     def create_user(  # type: ignore[override]
         self, email: str, password: str | None = None, **extra_fields: Any
-    ):
+    ) -> "User":
         extra_fields.setdefault("is_staff", False)
         extra_fields.setdefault("is_superuser", False)
         return self._create_user(email, password, **extra_fields)
 
     def create_superuser(  # type: ignore[override]
         self, email: str, password: str, **extra_fields: Any
-    ):
+    ) -> "User":
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", True)
         extra_fields.setdefault("type", "admin")
@@ -134,7 +143,7 @@ class User(AbstractUser):
         default="buyer",
     )
 
-    def __str__(self):
+    def __str__(self) -> str:
         full_name = f"{self.first_name} {self.last_name}".strip()
         return full_name or self.email
 
@@ -169,7 +178,7 @@ class Shop(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.name
 
     class Meta:
@@ -188,7 +197,7 @@ class Category(models.Model):
         default="active",
     )
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.name
 
 
@@ -202,7 +211,7 @@ class Product(models.Model):
         default="active",
     )
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.name
 
 
@@ -224,7 +233,7 @@ class ProductInfo(models.Model):
     )
     updated_at = models.DateTimeField(auto_now=True)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.name} ({self.shop})"
 
     class Meta:
@@ -260,7 +269,7 @@ class ProductInfo(models.Model):
 class Parameter(models.Model):
     name = models.CharField(max_length=150, unique=True)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.name
 
 
@@ -269,7 +278,7 @@ class ProductParameter(models.Model):
     parameter = models.ForeignKey(Parameter, on_delete=models.CASCADE)
     value = models.CharField(max_length=200)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.parameter}: {self.value}"
 
     class Meta:
@@ -299,7 +308,7 @@ class Contact(models.Model):
     phone = models.CharField(max_length=20, verbose_name="Телефон")
     is_deleted = models.BooleanField(default=False)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.city}, {self.street}, {self.phone}"
 
 
@@ -316,7 +325,7 @@ class Order(models.Model):
     )
     cancellation_reason = models.TextField(blank=True)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"Order #{self.pk} ({self.state})"
 
     class Meta:
@@ -352,7 +361,7 @@ class OrderItem(models.Model):
     shop_name_snapshot = models.CharField(max_length=150, blank=True)
     external_id_snapshot = models.CharField(max_length=100, blank=True)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.product_info} x {self.quantity}"
 
     class Meta:
@@ -366,3 +375,46 @@ class OrderItem(models.Model):
                 name="unique_order_item_offer",
             ),
         ]
+
+
+# 5. Модель импорта прайсов ----
+class ImportJob(models.Model):
+    shop = models.ForeignKey(
+        Shop,
+        on_delete=models.CASCADE,
+        verbose_name="Магазин",
+        related_name="import_jobs",
+    )
+    status = models.CharField(
+        verbose_name="Статус импорта",
+        choices=IMPORT_JOB_STATUS_CHOICES,
+        max_length=15,
+        default="pending",
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name="Дата создания",
+    )
+    completed_at = models.DateTimeField(
+        blank=True,
+        null=True,
+        verbose_name="Дата завершения",
+    )
+    stats = models.JSONField(
+        verbose_name="Статистика",
+        blank=True,
+        default=dict,
+    )
+    error_log = models.TextField(
+        verbose_name="Лог ошибок",
+        blank=True,
+        default="",
+    )
+
+    def __str__(self) -> str:
+        return f"ImportJob #{self.pk} ({self.shop.name}) — {self.status}"
+
+    class Meta:
+        verbose_name = "Задача импорта"
+        verbose_name_plural = "Задачи импорта"
+        ordering = ("-created_at",)

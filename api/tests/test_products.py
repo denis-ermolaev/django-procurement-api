@@ -174,15 +174,12 @@ class ProductAPITests(APITestCase):
         self.authenticate()
 
         response = self.api_client.get(
-            reverse("product-detail", args=[self.product_info.pk])
+            reverse("offer-detail", args=[self.product_info.pk])
         )
-        missing_response = self.api_client.get(
-            reverse("product-detail", args=[999_999])
-        )
+        missing_response = self.api_client.get(reverse("offer-detail", args=[999_999]))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["product"], self.product.pk)
-        self.assertEqual(response.data["price"], 100)
+        self.assertEqual(response.data["offer_id"], self.product_info.pk)
         self.assertEqual(missing_response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_offer_list_requires_authentication(self) -> None:
@@ -329,3 +326,43 @@ class ProductAPITests(APITestCase):
         product_ids = {offer["product_id"] for offer in response.data["results"]}
         self.assertEqual(product_ids, {self.product.pk})
         self.assertEqual(missing_response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class CategoryAPITests(APITestCase):
+    def test_category_list_requires_authentication(self) -> None:
+        response = self.api_client.get(reverse("categories"))
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_category_list_returns_active_categories(self) -> None:
+        self.authenticate()
+
+        response = self.api_client.get(reverse("categories"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 2)
+        category_names = {cat["name"] for cat in response.data}
+        self.assertIn(self.category.name, category_names)
+        self.assertIn(self.other_category.name, category_names)
+
+    def test_category_list_excludes_archived_categories(self) -> None:
+        self.category.status = "archived"
+        self.category.save(update_fields=["status"])
+        self.authenticate()
+
+        response = self.api_client.get(reverse("categories"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["name"], self.other_category.name)
+
+    def test_category_list_excludes_categories_without_active_shops(self) -> None:
+        self.shop.status = "blocked"
+        self.shop.save(update_fields=["status"])
+        self.authenticate()
+
+        response = self.api_client.get(reverse("categories"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["name"], self.other_category.name)

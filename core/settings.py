@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import logging
 import os
 from datetime import timedelta
 from pathlib import Path
@@ -40,6 +41,53 @@ def env_list(name: str, default: str = "") -> list[str]:
 # 2. Безопасность ----
 DEBUG = env_bool("DJANGO_DEBUG", default=True)
 
+# Настройки кэширования
+CACHE_BACKEND = os.getenv("DJANGO_CACHE_BACKEND", "locmem")
+CACHE_TIMEOUT_CATALOG = int(os.getenv("DJANGO_CACHE_TIMEOUT_CATALOG", "300"))  # 5 минут
+
+if CACHE_BACKEND == "redis":
+    try:
+        import redis  # noqa: F401
+    except ImportError:
+        CACHE_BACKEND = "locmem"
+        logging.warning(
+            "redis не установлен (pip install redis). Переключение на locmem cache."
+        )
+    else:
+        CACHES = {
+            "default": {
+                "BACKEND": "django.core.cache.backends.redis.RedisCache",
+                "LOCATION": os.getenv("DJANGO_REDIS_URL", "redis://redis:6379/1"),
+                "OPTIONS": {
+                    "socket_connect_timeout": 2,
+                },
+            }
+        }
+
+if CACHE_BACKEND != "redis":
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "procurement-api-cache",
+        }
+    }
+
+# 2a. RQ (асинхронная очередь задач) ----
+# По умолчанию используем тот же Redis, что и для кэша.
+# Если кэш на locmem, RQ всё равно может работать на Redis.
+_RQ_REDIS_HOST = "redis"
+_RQ_REDIS_PORT = 6379
+_RQ_REDIS_DB = 1
+
+RQ_QUEUES = {
+    "default": {
+        "HOST": os.getenv("DJANGO_RQ_HOST", _RQ_REDIS_HOST),
+        "PORT": int(os.getenv("DJANGO_RQ_PORT", str(_RQ_REDIS_PORT))),
+        "DB": int(os.getenv("DJANGO_RQ_DB", str(_RQ_REDIS_DB))),
+        "DEFAULT_TIMEOUT": 360,
+    },
+}
+
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
 if not SECRET_KEY:
     if DEBUG:
@@ -66,6 +114,7 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt.token_blacklist",
     "drf_spectacular",
     "django_filters",
+    "django_rq",
     "api",
 ]
 
@@ -145,6 +194,9 @@ USE_TZ = True
 # 8. Статика ----
 STATIC_URL = "static/"
 
+# Лимит размера загружаемых файлов — защита от OOM при импорте YAML-прайсов
+DATA_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024  # 5 MB
+
 
 # 9. Django REST Framework ----
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
@@ -157,6 +209,17 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",  # Доступ только для авторизованных по умолчанию
     ),
+    "DEFAULT_THROTTLE_CLASSES": (
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ),
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": os.getenv("DJANGO_THROTTLE_ANON", "20/minute"),
+        "user": os.getenv("DJANGO_THROTTLE_USER", "60/minute"),
+        "shop_register": os.getenv("DJANGO_THROTTLE_SHOP_REGISTER", "5/minute"),
+        "shop_import": os.getenv("DJANGO_THROTTLE_SHOP_IMPORT", "10/minute"),
+        "order_confirm": os.getenv("DJANGO_THROTTLE_ORDER_CONFIRM", "10/minute"),
+    },
 }
 
 

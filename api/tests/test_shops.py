@@ -172,8 +172,9 @@ class RolePermissionTests(APITestCase):
         self.assertFalse(
             IsActiveShop().has_permission(self.request_for(self.shop_user), None)
         )
-        self.shop_user.shop.status = "active"
-        self.shop_user.shop.save(update_fields=["status"])
+        shop_obj = Shop.objects.get(owner=self.shop_user)
+        shop_obj.status = "active"
+        shop_obj.save(update_fields=["status"])
         self.assertTrue(
             IsActiveShop().has_permission(self.request_for(self.shop_user), None)
         )

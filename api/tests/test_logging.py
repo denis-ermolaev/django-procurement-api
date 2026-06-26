@@ -2,15 +2,19 @@ import logging
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from django.core.management import call_command
 from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from rest_framework import status
 
-from api.management.email_service import send_order_confirmation
 from api.middleware import RequestLogMiddleware
 from api.models import Order
+from api.services.email_service import (
+    send_order_confirmation,
+    send_order_confirmation_async,
+)
 from api.tests.base import APITestCase
 
 
@@ -48,12 +52,12 @@ class RequestLoggingAPITests(APITestCase):
 
         with self.assertLogs("api.services.basket", level="INFO") as captured:
             response = self.api_client.post(
-                reverse("basket"),
-                {"product_info_id": self.product_info.pk, "quantity": 2},
+                reverse("basket-items"),
+                {"offer_id": self.product_info.pk, "quantity": 2},
                 format="json",
             )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertTrue(
             any("basket_created user_id=" in message for message in captured.output)
         )
@@ -69,7 +73,7 @@ class BusinessLoggingTests(APITestCase):
     def test_order_confirmation_email_records_business_logs(self) -> None:
         order = Order.objects.create(user=self.user, state="confirmed")
 
-        with self.assertLogs("api.management.email_service", level="INFO") as captured:
+        with self.assertLogs("api.services.email_service", level="INFO") as captured:
             send_order_confirmation(order)
 
         self.assertTrue(
@@ -114,6 +118,26 @@ goods:
         self.assertTrue(
             any(
                 "shop_data_load_completed" in message and "loaded_count=1" in message
+                for message in captured.output
+            )
+        )
+
+    def test_send_order_confirmation_async_logs_error_on_failure(self) -> None:
+        """12.1 RQ-задача send_order_confirmation_async логирует ошибку при падении."""
+        order = Order.objects.create(user=self.user, state="confirmed")
+
+        with (
+            patch(
+                "api.services.email_service.send_order_confirmation",
+                side_effect=RuntimeError("SMTP timeout"),
+            ),
+            self.assertLogs("api.services.email_service", level="ERROR") as captured,
+        ):
+            send_order_confirmation_async(order.pk)
+
+        self.assertTrue(
+            any(
+                "order_confirm_email_failed order_id=" in message
                 for message in captured.output
             )
         )

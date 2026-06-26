@@ -21,17 +21,19 @@ from api.views import (
     BasketItemDetailView,
     BasketItemsView,
     BasketView,
+    CategoryListView,
     ContactDetailView,
     ContactView,
-    LegacyContactView,
+    HealthCheckView,
     OfferDetailView,
     OfferListView,
+    OrderCancelView,
     OrderConfirmView,
     OrderDetailView,
     OrderListView,
-    ProductDetailView,
     ProductListView,
     ProductOffersView,
+    ShopImportStatusView,
     ShopImportView,
     ShopOfferDetailView,
     ShopOfferListCreateView,
@@ -43,10 +45,17 @@ from api.views import (
 
 # 1. Маршруты API ----
 urlpatterns = [
+    ## 0. Health-check ----
+    path("health/", HealthCheckView.as_view(), name="health-check"),
     ## 1.1. Магазины ----
     path("shops/register/", ShopRegistrationView.as_view(), name="shop-register"),
     path("shop/profile/", ShopProfileView.as_view(), name="shop-profile"),
     path("shop/imports/", ShopImportView.as_view(), name="shop-imports"),
+    path(
+        "shop/imports/<int:pk>/status/",
+        ShopImportStatusView.as_view(),
+        name="shop-import-status",
+    ),
     path("shop/offers/", ShopOfferListCreateView.as_view(), name="shop-offers"),
     path(
         "shop/offers/<int:pk>/",
@@ -131,7 +140,8 @@ urlpatterns = [
         AdminOrderItemDetailView.as_view(),
         name="admin-order-item-detail",
     ),
-    ## 1.3. Каталог ----
+    ## 1.3. Каталог и справочники ----
+    path("categories/", CategoryListView.as_view(), name="categories"),
     path("offers/<int:pk>/", OfferDetailView.as_view(), name="offer-detail"),
     path("offers/", OfferListView.as_view(), name="offers"),
     path(
@@ -139,7 +149,6 @@ urlpatterns = [
         ProductOffersView.as_view(),
         name="product-offers",
     ),
-    path("products/<int:pk>/", ProductDetailView.as_view(), name="product-detail"),
     path("products/", ProductListView.as_view(), name="products"),
     ## 1.4. Корзина и контакты ----
     path(
@@ -151,9 +160,9 @@ urlpatterns = [
     path("basket/", BasketView.as_view(), name="basket"),
     path("contacts/<int:pk>/", ContactDetailView.as_view(), name="contact-detail"),
     path("contacts/", ContactView.as_view(), name="contacts"),
-    path("contact/", LegacyContactView.as_view(), name="contact"),
     ## 1.5. Заказы ----
     path("order/confirm/", OrderConfirmView.as_view(), name="order-confirm"),
+    path("orders/<int:pk>/cancel/", OrderCancelView.as_view(), name="order-cancel"),
     path("orders/<int:pk>/", OrderDetailView.as_view(), name="order-detail"),
     path("orders/", OrderListView.as_view(), name="orders"),
 ]
