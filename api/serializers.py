@@ -641,13 +641,7 @@ class ContactSerializer(serializers.ModelSerializer):
 class AddToBasketSerializer(serializers.Serializer):
     offer_id = serializers.IntegerField(
         min_value=1,
-        required=False,
         help_text="ID предложения Offer/ProductInfo, которое нужно добавить в корзину.",
-    )
-    product_info_id = serializers.IntegerField(
-        min_value=1,
-        required=False,
-        help_text="Legacy alias для offer_id.",
     )
     quantity = serializers.IntegerField(
         min_value=1,
@@ -655,9 +649,8 @@ class AddToBasketSerializer(serializers.Serializer):
     )
 
     def validate(self, attrs):
-        if not attrs.get("offer_id") and not attrs.get("product_info_id"):
+        if not attrs.get("offer_id"):
             raise serializers.ValidationError({"offer_id": "Передайте offer_id."})
-        attrs["offer_id"] = attrs.get("offer_id") or attrs["product_info_id"]
         return attrs
 
 
@@ -666,31 +659,6 @@ class UpdateBasketItemSerializer(serializers.Serializer):
         min_value=1,
         help_text="Новое количество позиции корзины.",
     )
-
-
-class DeleteBasketItemSerializer(serializers.Serializer):
-    order_id = serializers.IntegerField(
-        min_value=1,
-        required=False,
-        help_text="Опциональный ID заказа-корзины для дополнительной проверки.",
-    )
-    item_id = serializers.IntegerField(
-        min_value=1,
-        required=False,
-        help_text="ID позиции корзины OrderItem, которую нужно удалить.",
-    )
-    product_info_id = serializers.IntegerField(
-        min_value=1,
-        required=False,
-        help_text="Устаревшее имя параметра. Временно принимается как item_id для обратной совместимости.",
-    )
-
-    def validate(self, attrs):
-        if not attrs.get("item_id") and not attrs.get("product_info_id"):
-            raise serializers.ValidationError(
-                {"item_id": "Передайте item_id позиции корзины."}
-            )
-        return attrs
 
 
 class OrderConfirmSerializer(serializers.Serializer):

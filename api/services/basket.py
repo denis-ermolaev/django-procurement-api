@@ -281,16 +281,12 @@ def update_basket_item_quantity(
     return order_item
 
 
-def delete_basket_item(
-    user: User, *, item_id: int, order_id: int | None = None
-) -> None:
+def delete_basket_item(user: User, *, item_id: int) -> None:
     item_filters = {
         "id": item_id,
         "order__user": user,
         "order__state": "basket",
     }
-    if order_id:
-        item_filters["order_id"] = order_id
 
     order_item = get_object_or_404(OrderItem, **item_filters)
     deleted_item_id = order_item.pk
