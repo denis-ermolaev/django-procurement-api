@@ -44,6 +44,52 @@ from api.serializers import (
     UserSerializer,
 )
 
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+#                              OPENAPI POSTPROCESSING HOOKS                    #
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+
+
+def add_server_entry(result, generator, request, public):
+    """POSTPROCESSING_HOOK — динамический Server entry для OpenAPI схемы.
+
+    Swagger UI использует поле ``servers`` для построения base URL при
+    выполнении запросов «Try It Out».  Без него запросы уходят на
+    ``https://host:port/api/...`` без префикса ``/proxy/8000/``, который
+    добавляет code-server, и получают 404.
+
+    Хук подхватывает ``SCRIPT_NAME`` (установленный WSGI middleware
+    :class:`~core.wsgi.ReverseProxyPrefix`) и строит полный URL вида:
+
+        https://192.168.137.2:8080/proxy/8000/
+
+    Если SCRIPT_NAME пуст (прямые запросы), сервер не добавляется — схема
+    остаётся чистой (drf-spectacular по умолчанию не включает servers).
+    """
+    if request is None:
+        return result
+
+    script_name = getattr(request, "script_name", "") or request.META.get(
+        "SCRIPT_NAME", ""
+    )
+    if not script_name:
+        return result
+
+    # Собираем вручную: scheme + host + script_name
+    # build_absolute_uri('/') неприменим — urljoin заменит весь path,
+    # потеряв SCRIPT_NAME.
+    scheme = request.scheme
+    host = request.get_host()
+    server_url = f"{scheme}://{host}{script_name}/"
+
+    if not any(s.get("url") == server_url for s in result.get("servers", [])):
+        result.setdefault("servers", [])
+        result["servers"].append({"url": server_url})
+
+    return result
+
+
+# ---------------------------------------------------------------------------- #
+
 # 1. Общие ответы OpenAPI ----
 AUTH_REQUIRED_RESPONSE = OpenApiResponse(
     response=ErrorDetailSerializer,

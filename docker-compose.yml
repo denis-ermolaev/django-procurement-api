@@ -18,7 +18,12 @@ services:
 
   # 2. Django API ----
   web:
-    build: .
+    build:
+      context: .
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
     command: >
       sh -c "python manage.py migrate --noinput &&
              python manage.py load_shop_data /app/data/shop1.yaml &&
@@ -53,7 +58,12 @@ services:
 
   # 5. RQ Worker (асинхронная обработка задач) ----
   worker:
-    build: .
+    build:
+      context: .
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
     command: python manage.py rqworker default
     volumes:
       - .:/app

@@ -97,7 +97,25 @@ if not SECRET_KEY:
             "DJANGO_SECRET_KEY must be set when DJANGO_DEBUG=False."
         )
 
-ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,testserver")
+ALLOWED_HOSTS = env_list(
+    "DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,192.168.137.2,testserver"
+)
+
+
+# 2a. Прокси (code-server / reverse proxy) ----
+# code-server проксирует https://192.168.137.2:8080/proxy/8000/ → http://web:8000
+# WSGI middleware (core/wsgi.py) динамически устанавливает SCRIPT_NAME при
+# обнаружении X-Forwarded заголовков, чтобы все сгенерированные Django URL
+# (пагинация, reverse(), Swagger) содержали префикс /proxy/8000.
+# Прямые запросы (localhost:8000) работают без префикса — одновременно.
+
+USE_X_FORWARDED_HOST = env_bool("DJANGO_USE_X_FORWARDED_HOST", default=True)
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+_CSRF_ORIGINS = env_list("DJANGO_CSRF_TRUSTED_ORIGINS", "")
+if "https://192.168.137.2:8080" not in _CSRF_ORIGINS:
+    _CSRF_ORIGINS.append("https://192.168.137.2:8080")
+CSRF_TRUSTED_ORIGINS = _CSRF_ORIGINS
 
 
 # 3. Приложения ----
@@ -250,6 +268,11 @@ SPECTACULAR_SETTINGS = {
         "displayOperationId": True,
         "filter": True,
     },
+    # Сервер для Try It Out в Swagger UI.  hook динамически добавляет
+    # entry с учётом SCRIPT_NAME (префикс /proxy/8000 для code-server).
+    "POSTPROCESSING_HOOKS": [
+        "api.openapi.add_server_entry",
+    ],
     "TAGS": [
         {
             "name": "Products",
