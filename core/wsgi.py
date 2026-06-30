@@ -58,18 +58,14 @@ class ReverseProxyPrefix:
         if self._proxy_script_name and self._detect_proxy(environ):
             environ["SCRIPT_NAME"] = self._proxy_script_name
 
-            # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
-            #  Устанавливаем X-Forwarded-Proto для SECURE_PROXY_SSL_HEADER #
-            # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+            # Устанавливаем X-Forwarded-Proto для SECURE_PROXY_SSL_HEADER
             # code-server принимает HTTPS, но проксирует на HTTP без
             # установки X-Forwarded-*.  Без него Django считает протокол
             # запроса HTTP и генерирует URL схемы OpenAPI с http://, что
             # приводит к mixed-content при вызове API из Swagger UI.
             environ.setdefault("HTTP_X_FORWARDED_PROTO", "https")
 
-            # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
-            #  Вычитаем префикс из PATH_INFO                               #
-            # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+            # Вычитаем префикс из PATH_INFO
             path_info = environ.get("PATH_INFO", "")
             if path_info.startswith(self._proxy_script_name):
                 environ["PATH_INFO"] = path_info.removeprefix(self._proxy_script_name)
